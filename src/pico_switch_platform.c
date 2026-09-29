@@ -263,7 +263,7 @@ static void pico_switch_platform_on_init_complete(void) {
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
 
     logi("BLUEPAD: Pro Controller ready for keyboard and mouse\n");
-    multicore_fifo_push_blocking(0);
+    multicore_fifo_push_timeout_us(0, 100);
 }
 
 static void pico_switch_platform_on_device_connected(uni_hid_device_t *d) {

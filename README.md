@@ -4,6 +4,13 @@ Turns a Raspberry Pi Pico W into a Bluetooth keyboard and mouse adapter for the 
 
 ## Key Features
 - **Official Pro Controller Emulation**: Connects to the Switch as a genuine Pro Controller (`0x057E:0x2009`), handling USB 0x80 handshakes, subcommands, and factory SPI calibration roms.
+
+> [!IMPORTANT]
+> **Nintendo Switch Setting Required:**
+> On your Nintendo Switch console, you **must enable**:
+> **System Settings $\rightarrow$ Controllers and Sensors $\rightarrow$ Pro Controller Wired Communication: ON**
+> If this setting is turned OFF, the Nintendo Switch will not communicate with any wired Pro Controller over USB and will disconnect it immediately.
+
 - **High-Precision 12-Bit Analog Sticks**: Left stick (WASD) and Right stick (Mouse movement + Arrow keys) operate on full 12-bit axis resolution (`0x000` to `0xFFF`, center `0x800`).
 - **High Polling Rate**: Streams standard Pro Controller 0x30 input reports at 125 Hz (8 ms interval).
 - **Automated GitHub Actions CI**: Every commit, tag, and pull request automatically builds `SwitchKMAdapter.uf2` using ARM GCC and Pico SDK. Ready-to-flash binaries are available in GitHub Actions artifacts and Releases.
