@@ -1,43 +1,85 @@
-# SwitchKMAdapter
-Turns a Raspberry Pi Pico W into a Bluetooth keyboard and mouse adapter for the original Nintendo Switch and Nintendo Switch 2.
+# SwitchKMAdapter — Nintendo Switch Pro Controller Adapter
 
-[Video](https://www.youtube.com/watch?v=kLLIgxpmcA8&)
+Turns a Raspberry Pi Pico W into a Bluetooth keyboard and mouse adapter for the Nintendo Switch and Nintendo Switch OLED / Dock, emulating an official **Nintendo Switch Pro Controller (VID 0x057E / PID 0x2009)**.
 
-[List of known supported keyboards](https://bluepad32.readthedocs.io/en/latest/supported_keyboards/)
+## Key Features
+- **Official Pro Controller Emulation**: Connects to the Switch as a genuine Pro Controller (`0x057E:0x2009`), handling USB 0x80 handshakes, subcommands, and factory SPI calibration roms.
+- **High-Precision 12-Bit Analog Sticks**: Left stick (WASD) and Right stick (Mouse movement + Arrow keys) operate on full 12-bit axis resolution (`0x000` to `0xFFF`, center `0x800`).
+- **High Polling Rate**: Streams standard Pro Controller 0x30 input reports at 125 Hz (8 ms interval).
+- **Automated GitHub Actions CI**: Every commit, tag, and pull request automatically builds `SwitchKMAdapter.uf2` using ARM GCC and Pico SDK. Ready-to-flash binaries are available in GitHub Actions artifacts and Releases.
+- **Phase 2 Ready**: Protocol and reporting architecture ready for mouse-to-gyro 6-axis IMU fusion.
 
-[List of known supported mice](https://bluepad32.readthedocs.io/en/latest/supported_mice/)
+---
 
-**NOTE:** If your keyboard/mouse is not listed on the supported list it may or may not work, try another device if yours doesn't work.
+## Default Controls Mapping
 
-## Installing
-1. Download latest `SwitchKMAdapter.uf2` file from [releases](https://github.com/Tejasarus/SwitchKMAdapter/releases).
-2. Plug Pico W on PC while holding the bootsel button.
-3. Drag and drop `SwitchKMAdapter.uf2` inside the Pico W root folder
-4. Plug Pico W into Switch
-5. Put both keyboard/mouse into pairing mode, they will auto pair to the Pico W
+### Keyboard to Controller
+| Keyboard Key | Pro Controller Input |
+| :--- | :--- |
+| **W / A / S / D** | Left Analog Stick (12-bit Up / Left / Down / Right) |
+| **Arrow Up / Down / Left / Right** | Right Analog Stick Camera Sweeps (12-bit) |
+| **Q** | **A** Button |
+| **Space** | **B** Button |
+| **R** | **X** Button |
+| **E** | **Y** Button |
+| **F** | D-Pad **Up** |
+| **B** | D-Pad **Down** |
+| **I** | D-Pad **Right** |
+| **Left Shift** | **L3** (Left Stick Click) |
+| **Left Control** | **R3** (Right Stick Click) |
+| **Tab** | **Minus (-)** Button |
+| **Esc** | **Plus (+)** Button |
+| **H** | **Home** Button |
+| **C** | **Capture** Button |
 
-## Setup, Building, and Modifying
-### What you need
-1. A Raspberry Pi Pico W (Pico W 2 has not been tested)
-2. CMake (3.13+) & GCC cross compiler
-3. A way to connect it to the Switch/Dock (microUSB cable, type C dongle, etc.)
+### Mouse to Controller
+| Mouse Input | Pro Controller Input |
+| :--- | :--- |
+| **Mouse Motion (X/Y)** | Right Analog Stick (12-bit aim with smooth idle decay) |
+| **Left Click** | **ZR** (Trigger) |
+| **Right Click** | **ZL** (Trigger) |
+| **Middle Click** | D-Pad **Left** |
+| **Scroll Wheel Up** | **L** (Shoulder button) |
+| **Scroll Wheel Down** | **R** (Shoulder button) |
 
-### Building
-1. `git clone` this repo
-2. `cd` into root of this repo
-3. Run `git submodule update --init --recursive` to download all submodules
-4. `cmake -G "MinGW Makefiles"`
-5. `cmake --build .`
-6. `SwitchKMAdapter.uf2` should generate inside the root of the project
+---
 
-### Modifying
-To change which keys/mouse buttons are mapped to the switch buttons, you will need to modify the `pico_switch_platform.c` file located in the `\src` folder.
+## Installation & Flashing
 
-The functions `fill_gamepad_report_from_keyboard` and `fill_gamepad_report_from_mouse` contains the logic for mapping the keyboard/mouse to the switch.
+1. Download the latest `SwitchKMAdapter.uf2` from GitHub Actions artifacts or Releases.
+2. Hold the **BOOTSEL** button on your Raspberry Pi Pico W and plug it into your computer via micro-USB.
+3. Drag and drop `SwitchKMAdapter.uf2` onto the `RPI-RP2` USB drive.
+4. Plug the Pico W into your Nintendo Switch dock using a USB data cable.
+5. Put your Bluetooth keyboard and Bluetooth mouse into pairing mode. The Pico W's onboard LED will illuminate once connected.
 
-For the list of keyboard keys refer to the `KeyboardKeys.h` file in the `\include` folder.
+---
 
-## Acknowledgements
-- This project is a modified version of [PicoSwitch-WirelessGamepadAdapter](https://github.com/juan518munoz/PicoSwitch-WirelessGamepadAdapter) by [juan518munoz](https://github.com/juan518munoz) to work with a keyboard and mouse.
-- [Bluepad32](https://github.com/ricardoquesada/bluepad32) by [ricardoquesada](https://github.com/ricardoquesada) 
-- [TinyUSB](https://github.com/hathach/tinyusb) by [hathach](https://github.com/hathach)
+## Building from GitHub Actions
+
+This repository includes a pre-configured GitHub Actions workflow (`.github/workflows/build.yml`):
+- Pushing to `main` or creating a tag (`v1.0.0`) automatically triggers a build on Ubuntu 24.04 with `gcc-arm-none-eabi`.
+- The compiled `SwitchKMAdapter.uf2` file is attached to the workflow run artifacts for instant download.
+
+---
+
+## Local Building
+
+### Prerequisites
+1. Raspberry Pi Pico W board
+2. CMake (3.13+) and `arm-none-eabi-gcc` toolchain
+3. Pico SDK (1.5.1+)
+
+### Build Commands
+```bash
+git clone --recursive https://github.com/TheWarmFrick/SwitchKMAdapter.git
+cd SwitchKMAdapter
+cmake -B build -DPICO_BOARD=pico_w
+cmake --build build --target SwitchKMAdapter
+```
+The resulting `SwitchKMAdapter.uf2` will be generated in the `build/` directory.
+
+---
+
+## Roadmap
+- [x] **Phase 1**: Official Nintendo Switch Pro Controller protocol emulation (`0x057E:0x2009`), 12-bit stick scaling, right stick camera sweeps, and automated GitHub Actions CI.
+- [ ] **Phase 2**: Mouse-to-gyro 6-axis IMU sensor fusion (nxic-pico math model: angle-preserving accumulator, gravity vector tracking, 3-frame 5ms sub-sampling, pitch reset key).

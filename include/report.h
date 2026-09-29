@@ -1,10 +1,17 @@
-#ifndef _REPORT_H_
-#define _REPORT_H_
+#ifndef REPORT_H
+#define REPORT_H
 
-#include "usb.h"
 #include "SwitchDescriptors.h"
 
-void set_global_gamepad_report(SwitchIdxOutReport *rpt);
-void get_global_gamepad_report(SwitchIdxOutReport *rpt);
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+void set_global_procon_state(const ProconIdxState *rpt);
+void get_global_procon_state(ProconIdxState *rpt);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

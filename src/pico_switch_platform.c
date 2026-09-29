@@ -20,17 +20,16 @@
 #error "Pico W must use BLUEPAD32_PLATFORM_CUSTOM"
 #endif
 
-#define AXIS_DEADZONE 0xa
-#define JOYSTICK_CENTER 0x80
-#define MOUSE_SENSITIVITY 5
-#define MOUSE_IDLE_TIMEOUT_MS 40
-static uint32_t last_mouse_move_time_ms = 0;
+// 12-bit analog stick sensitivity & timing constants
+#define MOUSE_STICK_SENSITIVITY 40
+#define MOUSE_IDLE_TIMEOUT_MS 35
 
-// Declarations
-static void trigger_event_on_gamepad(uni_hid_device_t *d);
-SwitchOutReport report[CONFIG_BLUEPAD32_MAX_DEVICES];
-SwitchIdxOutReport idx_r;
-uint8_t connected_controllers;
+static uint32_t last_mouse_move_time_ms = 0;
+static uint16_t current_rx = STICK_CENTER;
+static uint16_t current_ry = STICK_CENTER;
+
+static ProconIdxState idx_state;
+static uint8_t connected_controllers = 0;
 
 typedef struct {
     bool has_keyboard;
@@ -41,565 +40,300 @@ typedef struct {
 
 static CombinedControllerState combined_states[CONFIG_BLUEPAD32_MAX_DEVICES];
 
-// Helper functions
-static void
-empty_gamepad_report(SwitchOutReport *gamepad)
-{
-	gamepad->buttons = 0;
-	gamepad->hat = SWITCH_HAT_NOTHING;
-	gamepad->lx = SWITCH_JOYSTICK_MID;
-	gamepad->ly = SWITCH_JOYSTICK_MID;
-	gamepad->rx = SWITCH_JOYSTICK_MID;
-	gamepad->ry = SWITCH_JOYSTICK_MID;
+//--------------------------------------------------------------------
+// Helper Functions
+//--------------------------------------------------------------------
+static void empty_procon_state(ProconState *st) {
+    memset(st, 0, sizeof(ProconState));
+    procon_pack_stick(&st->stick[0], STICK_CENTER, STICK_CENTER);
+    procon_pack_stick(&st->stick[3], STICK_CENTER, STICK_CENTER);
+
+    // Resting flat on table: Accel Z = +4096 (1G), Gyro = 0
+    for (int f = 0; f < 3; f++) {
+        st->imu[f][0] = 0;
+        st->imu[f][1] = 0;
+        st->imu[f][2] = 4096;
+        st->imu[f][3] = 0;
+        st->imu[f][4] = 0;
+        st->imu[f][5] = 0;
+    }
 }
 
-uint8_t
-convert_to_switch_axis(int32_t bluepadAxis)
-{
-	// bluepad32 reports from -512 to 511 as int32_t
-	// switch reports from 0 to 255 as uint8_t
-
-	bluepadAxis += 513;  // now max possible is 1024
-	bluepadAxis /= 4;    // now max possible is 255
-
-	if (bluepadAxis < SWITCH_JOYSTICK_MIN)
-		bluepadAxis = 0;
-	else if ((bluepadAxis > (SWITCH_JOYSTICK_MID - AXIS_DEADZONE)) &&
-	         (bluepadAxis < (SWITCH_JOYSTICK_MID + AXIS_DEADZONE))) {
-		bluepadAxis = SWITCH_JOYSTICK_MID;
-	} else if (bluepadAxis > SWITCH_JOYSTICK_MAX)
-		bluepadAxis = SWITCH_JOYSTICK_MAX;
-
-	return (uint8_t) bluepadAxis;
+static uint16_t clamp_stick_12(int val) {
+    if (val < STICK_MIN) return STICK_MIN;
+    if (val > STICK_MAX) return STICK_MAX;
+    return (uint16_t)val;
 }
 
-// Clamp between 0 and 255
-static uint8_t clamp_stick_value(int val) 
-{
-    if (val < 0) return 0;
-    if (val > 255) return 255;
-    return (uint8_t)val;
-}
-
-static void fill_gamepad_report_from_keyboard(int idx, const uni_keyboard_t* gp) 
-{
-    
-	if ((gp->modifiers & UNI_KEYBOARD_MODIFIER_LEFT_SHIFT)) {
-        report[idx].buttons |= SWITCH_MASK_L3;
+//--------------------------------------------------------------------
+// Keyboard Input -> Pro Controller State
+//--------------------------------------------------------------------
+static void fill_procon_from_keyboard(ProconState *st, const uni_keyboard_t *kb) {
+    // Modifier keys
+    if (kb->modifiers & UNI_KEYBOARD_MODIFIER_LEFT_SHIFT) {
+        st->btn[1] |= PROCON_BTN1_LCLICK; // L3
+    }
+    if (kb->modifiers & UNI_KEYBOARD_MODIFIER_LEFT_CONTROL) {
+        st->btn[1] |= PROCON_BTN1_RCLICK; // R3
     }
 
-	if ((gp->modifiers & UNI_KEYBOARD_MODIFIER_LEFT_CONTROL)) {
-        report[idx].buttons |= SWITCH_MASK_R3;
-    }
+    bool up = false, down = false, left = false, right = false;
+    bool cam_up = false, cam_down = false, cam_left = false, cam_right = false;
 
     for (int i = 0; i < UNI_KEYBOARD_PRESSED_KEYS_MAX; i++) {
-        uint8_t key = gp->pressed_keys[i];
+        uint8_t key = kb->pressed_keys[i];
+        if (key == 0) continue;
+
         switch (key) {
-
-			// A Button
+            // Face buttons
             case KEY_Q:
-                report[idx].buttons |= SWITCH_MASK_A;
+                st->btn[0] |= PROCON_BTN0_A;
                 break;
-
-			// B Button
-			case KEY_SPACE:
-                report[idx].buttons |= SWITCH_MASK_B;
+            case KEY_SPACE:
+                st->btn[0] |= PROCON_BTN0_B;
                 break;
-
-			// X Button
             case KEY_R:
-                report[idx].buttons |= SWITCH_MASK_X;
+                st->btn[0] |= PROCON_BTN0_X;
+                break;
+            case KEY_E:
+                st->btn[0] |= PROCON_BTN0_Y;
                 break;
 
-			// Y Button
-			case KEY_E:
-				report[idx].buttons |= SWITCH_MASK_Y;
-                break;
-			
-			// Dpad Down
+            // D-Pad
             case KEY_B:
-                report[idx].hat = SWITCH_HAT_DOWN;
+                st->btn[2] |= PROCON_BTN2_DOWN;
+                break;
+            case KEY_F:
+                st->btn[2] |= PROCON_BTN2_UP;
+                break;
+            case KEY_I:
+                st->btn[2] |= PROCON_BTN2_RIGHT;
                 break;
 
-			//Dpad Up
-			case KEY_F:
-                report[idx].hat = SWITCH_HAT_UP;
+            // System buttons
+            case KEY_TAB:
+                st->btn[1] |= PROCON_BTN1_MINUS;
                 break;
-			
-			//Dpad Right
-			case KEY_I:
-                report[idx].hat = SWITCH_HAT_RIGHT;
+            case KEY_ESC:
+                st->btn[1] |= PROCON_BTN1_PLUS;
                 break;
-
-			//Minus Button
-			case KEY_TAB:
-                report[idx].buttons |= SWITCH_MASK_MINUS;
+            case KEY_H:
+                st->btn[1] |= PROCON_BTN1_HOME;
                 break;
-			
-			//Plus Button
-			case KEY_ESC:
-                report[idx].buttons |= SWITCH_MASK_PLUS;
-                break;
-			
-			//Home Button
-			case KEY_H:
-                report[idx].buttons |= SWITCH_MASK_HOME;
-                break;
-			
-			//Capture Button
-			case KEY_C:
-                report[idx].buttons |= SWITCH_MASK_CAPTURE;
+            case KEY_C:
+                st->btn[1] |= PROCON_BTN1_CAPTURE;
                 break;
 
-			//Left Joystick movement
+            // Left Joystick (WASD)
             case KEY_W:
-                report[idx].ly = 0x00; // up
+                up = true;
                 break;
-
             case KEY_S:
-                report[idx].ly = 0xFF; // down
+                down = true;
                 break;
-
             case KEY_A:
-                report[idx].lx = 0x00; // left
+                left = true;
+                break;
+            case KEY_D:
+                right = true;
                 break;
 
-            case KEY_D:
-                report[idx].lx = 0xFF; // right
+            // Right Joystick Camera Sweeps (Arrow Keys)
+            case KEY_UP:
+                cam_up = true;
+                break;
+            case KEY_DOWN:
+                cam_down = true;
+                break;
+            case KEY_LEFT:
+                cam_left = true;
+                break;
+            case KEY_RIGHT:
+                cam_right = true;
                 break;
 
             default:
                 break;
         }
     }
+
+    // Left Stick calculation
+    uint16_t lx = STICK_CENTER;
+    uint16_t ly = STICK_CENTER;
+    if (left && !right) lx = STICK_MIN;
+    else if (right && !left) lx = STICK_MAX;
+
+    if (down && !up) ly = STICK_MIN;
+    else if (up && !down) ly = STICK_MAX;
+
+    procon_pack_stick(&st->stick[0], lx, ly);
+
+    // Keyboard camera sweep override for right stick
+    if (cam_left || cam_right || cam_up || cam_down) {
+        if (cam_left && !cam_right) current_rx = STICK_MIN;
+        else if (cam_right && !cam_left) current_rx = STICK_MAX;
+
+        if (cam_down && !cam_up) current_ry = STICK_MIN;
+        else if (cam_up && !cam_down) current_ry = STICK_MAX;
+    }
 }
 
-static void fill_gamepad_report_from_mouse(int idx, const uni_mouse_t* mouse) 
-{   
-	absolute_time_t now = get_absolute_time();
+//--------------------------------------------------------------------
+// Mouse Input -> Pro Controller State
+//--------------------------------------------------------------------
+static void fill_procon_from_mouse(ProconState *st, const uni_mouse_t *mouse) {
+    absolute_time_t now = get_absolute_time();
     uint32_t now_ms = to_ms_since_boot(now);
 
-	//right click
-    if (mouse->buttons & MOUSE_BUTTON_RIGHT) 
-	{
-        report[idx].buttons |= SWITCH_MASK_ZL;
-	} 
-	else 
-	{
-		report[idx].buttons &= ~SWITCH_MASK_ZL; 
+    // Right Click -> ZL
+    if (mouse->buttons & MOUSE_BUTTON_RIGHT) {
+        st->btn[2] |= PROCON_BTN2_ZL;
     }
 
-	//left click
-    if (mouse->buttons & MOUSE_BUTTON_LEFT) 
-	{
-        report[idx].buttons |= SWITCH_MASK_ZR;
-    } 
-	else 
-	{
-		report[idx].buttons &= ~SWITCH_MASK_ZR; 
-	}
-
-	//middle click
-	if (mouse->buttons & MOUSE_BUTTON_MIDDLE) 
-	{
-        report[idx].hat = SWITCH_HAT_LEFT;
+    // Left Click -> ZR
+    if (mouse->buttons & MOUSE_BUTTON_LEFT) {
+        st->btn[0] |= PROCON_BTN0_ZR;
     }
 
-	//scroll wheel
-    if (mouse->scroll_wheel > 0) //up
-	{
-		report[idx].buttons |= SWITCH_MASK_L;
-		((uni_mouse_t*)mouse)->scroll_wheel = 0;
-	}
+    // Middle Click -> D-Pad Left
+    if (mouse->buttons & MOUSE_BUTTON_MIDDLE) {
+        st->btn[2] |= PROCON_BTN2_LEFT;
+    }
 
-	if (mouse->scroll_wheel < 0) //down
-	{
-		report[idx].buttons |= SWITCH_MASK_R;
-		((uni_mouse_t*)mouse)->scroll_wheel = 0;
-	}
+    // Scroll Wheel: Up -> L, Down -> R
+    if (mouse->scroll_wheel > 0) {
+        st->btn[2] |= PROCON_BTN2_L;
+        ((uni_mouse_t *)mouse)->scroll_wheel = 0;
+    } else if (mouse->scroll_wheel < 0) {
+        st->btn[0] |= PROCON_BTN0_R;
+        ((uni_mouse_t *)mouse)->scroll_wheel = 0;
+    }
 
-	//mouse movement
+    // Mouse Movement -> Right Stick (Phase 1)
     if (mouse->delta_x != 0 || mouse->delta_y != 0) {
         last_mouse_move_time_ms = now_ms;
-        int rx = JOYSTICK_CENTER + (mouse->delta_x * MOUSE_SENSITIVITY);
-        int ry = JOYSTICK_CENTER + (mouse->delta_y * MOUSE_SENSITIVITY);
 
-        report[idx].rx = clamp_stick_value(rx);
-        report[idx].ry = clamp_stick_value(ry);
+        // Invert Y delta because HID positive is downwards, while Switch 12-bit stick 0xFFF is upwards
+        int rx = STICK_CENTER + (mouse->delta_x * MOUSE_STICK_SENSITIVITY);
+        int ry = STICK_CENTER - (mouse->delta_y * MOUSE_STICK_SENSITIVITY);
 
-    } 
-	else 
-	{
-        if ((now_ms - last_mouse_move_time_ms) < MOUSE_IDLE_TIMEOUT_MS) {} 
-		else 
-		{
-            report[idx].rx = JOYSTICK_CENTER;
-            report[idx].ry = JOYSTICK_CENTER;
-			
-		}
+        current_rx = clamp_stick_12(rx);
+        current_ry = clamp_stick_12(ry);
+    } else {
+        if ((now_ms - last_mouse_move_time_ms) >= MOUSE_IDLE_TIMEOUT_MS) {
+            current_rx = STICK_CENTER;
+            current_ry = STICK_CENTER;
+        }
+    }
+
+    procon_pack_stick(&st->stick[3], current_rx, current_ry);
+}
+
+static void set_led_status(void) {
+    if (connected_controllers == 0) {
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
+    } else {
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
     }
 }
 
-static void
-fill_gamepad_report(int idx, uni_controller_t* ctl)
-{
-	empty_gamepad_report(&report[idx]);
-
-	//Keyboard logic
-	if (ctl->klass == UNI_CONTROLLER_CLASS_KEYBOARD) {
-
-        uni_keyboard_t* gp = &ctl->keyboard;
-		// face buttons
-		if ((gp->modifiers & UNI_KEYBOARD_MODIFIER_LEFT_SHIFT)) {
-
-			report[idx].buttons |= SWITCH_MASK_L3;
-		}
-
-		for (int i = 0; i < UNI_KEYBOARD_PRESSED_KEYS_MAX; i++) {
-
-			if (gp->pressed_keys[i] == KEY_E) {
-				report[idx].buttons |= SWITCH_MASK_Y;
-				break;
-			}
-
-			if (gp->pressed_keys[i] == KEY_R) {
-				report[idx].buttons |= SWITCH_MASK_Y;
-				break;
-			}
-
-			if (gp->pressed_keys[i] == KEY_SPACE) {
-				report[idx].buttons |= SWITCH_MASK_B;
-				break;
-			}
-
-			if (gp->pressed_keys[i] == KEY_B) {
-				report[idx].hat = SWITCH_HAT_DOWN;
-				break;
-			}
-
-			if (gp->pressed_keys[i] == KEY_Q) {
-				report[idx].buttons |= SWITCH_MASK_A;
-				break;
-			}
-
-			switch (gp->pressed_keys[i]) 
-			{
-				case KEY_W: report[idx].ly = 0x00; break;  // up
-				case KEY_S: report[idx].ly = 0xFF; break;  // down
-				case KEY_A: report[idx].lx = 0x00; break;  // left
-				case KEY_D: report[idx].lx = 0xFF; break;  // right
-			}
-
-
-		}
-	}
-
-	//Mouse logic
-    if (ctl->klass == UNI_CONTROLLER_CLASS_MOUSE) {
-
-        uni_mouse_t* mouse = &ctl->mouse;
-		absolute_time_t now = get_absolute_time();
-		uint32_t now_ms = to_ms_since_boot(now);
-
-        if (mouse->buttons & MOUSE_BUTTON_RIGHT)
-		{
-			report[idx].buttons |= SWITCH_MASK_ZL;
-		}
-
-		if (mouse->buttons & MOUSE_BUTTON_LEFT)
-		{
-			report[idx].buttons |= SWITCH_MASK_ZR;
-		}
-
-		if (mouse->scroll_wheel > 0)
-		{
-			report[idx].buttons |= SWITCH_MASK_R;
-		}
-        
-		if (mouse->scroll_wheel < 0)
-		{
-			report[idx].buttons |= SWITCH_MASK_L;
-		}
-		
-		/*
-		int rx = JOYSTICK_CENTER + (mouse->delta_x * MOUSE_SENSITIVITY);
-		int ry = JOYSTICK_CENTER + (mouse->delta_y * MOUSE_SENSITIVITY);
-
-		report[idx].rx = clamp_stick_value(rx);
-		report[idx].ry = clamp_stick_value(ry);
-		*/
-		
-		if (mouse->delta_x != 0 || mouse->delta_y != 0) {
-			last_mouse_move_time_ms = now_ms;
-
-			int rx = JOYSTICK_CENTER + (mouse->delta_x * MOUSE_SENSITIVITY);
-			int ry = JOYSTICK_CENTER + (mouse->delta_y * MOUSE_SENSITIVITY);
-
-			report[idx].rx = clamp_stick_value(rx);
-			report[idx].ry = clamp_stick_value(ry);
-		}
-		else {
-			if ((now_ms - last_mouse_move_time_ms) < MOUSE_IDLE_TIMEOUT_MS) {
-				// Keep stick at last value — don’t snap to center yet
-			} else {
-				// Reset stick to center after timeout
-				report[idx].rx = JOYSTICK_CENTER;
-				report[idx].ry = JOYSTICK_CENTER;
-			}
-		}
-            
-    }
-	/*
-	if ((gp->modifiers & KEY_W)) {
-		report[idx].buttons |= SWITCH_MASK_B;
-	}
-	
-	if ((gp->buttons & BUTTON_X)) {
-		report[idx].buttons |= SWITCH_MASK_X;
-	}
-	if ((gp->buttons & BUTTON_Y)) {
-		report[idx].buttons |= SWITCH_MASK_Y;
-	}
-
-	// shoulder buttons
-	if ((gp->buttons & BUTTON_SHOULDER_L)) {
-		report[idx].buttons |= SWITCH_MASK_L;
-	}
-	if ((gp->buttons & BUTTON_SHOULDER_R)) {
-		report[idx].buttons |= SWITCH_MASK_R;
-	}
-
-	// dpad
-	switch (gp->dpad) {
-	case DPAD_UP:
-		report[idx].hat = SWITCH_HAT_UP;
-		break;
-	case DPAD_DOWN:
-		report[idx].hat = SWITCH_HAT_DOWN;
-		break;
-	case DPAD_LEFT:
-		report[idx].hat = SWITCH_HAT_LEFT;
-		break;
-	case DPAD_RIGHT:
-		report[idx].hat = SWITCH_HAT_RIGHT;
-		break;
-	case DPAD_UP | DPAD_RIGHT:
-		report[idx].hat = SWITCH_HAT_UPRIGHT;
-		break;
-	case DPAD_DOWN | DPAD_RIGHT:
-		report[idx].hat = SWITCH_HAT_DOWNRIGHT;
-		break;
-	case DPAD_DOWN | DPAD_LEFT:
-		report[idx].hat = SWITCH_HAT_DOWNLEFT;
-		break;
-	case DPAD_UP | DPAD_LEFT:
-		report[idx].hat = SWITCH_HAT_UPLEFT;
-		break;
-	default:
-		report[idx].hat = SWITCH_HAT_NOTHING;
-		break;
-	}
-	*/
-	/*
-	// sticks
-	report[idx].lx = convert_to_switch_axis(gp->axis_x);
-	report[idx].ly = convert_to_switch_axis(gp->axis_y);
-	report[idx].rx = convert_to_switch_axis(gp->axis_rx);
-	report[idx].ry = convert_to_switch_axis(gp->axis_ry);
-	if ((gp->buttons & BUTTON_THUMB_L))
-		report[idx].buttons |= SWITCH_MASK_L3;
-	if ((gp->buttons & BUTTON_THUMB_R))
-		report[idx].buttons |= SWITCH_MASK_R3;
-
-	
-	// triggers
-	if (gp->brake)
-		report[idx].buttons |= SWITCH_MASK_ZL;
-	if (gp->throttle)
-		report[idx].buttons |= SWITCH_MASK_ZR;
-
-	// misc buttons
-	if (gp->misc_buttons & MISC_BUTTON_SYSTEM)
-		report[idx].buttons |= SWITCH_MASK_HOME;
-	if (gp->misc_buttons & MISC_BUTTON_CAPTURE)
-		report[idx].buttons |= SWITCH_MASK_CAPTURE;
-	if (gp->misc_buttons & MISC_BUTTON_BACK)
-		report[idx].buttons |= SWITCH_MASK_MINUS;
-	if (gp->misc_buttons & MISC_BUTTON_HOME)
-		report[idx].buttons |= SWITCH_MASK_PLUS;
-	*/
-}
-
-static void
-set_led_status() {
-	if (connected_controllers == 0)
-		cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
-	else
-		cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
-}
-
-//
-// Platform Overrides
-//
-static void pico_switch_platform_init(int argc, const char** argv) 
-{
+//--------------------------------------------------------------------
+// Bluepad32 Platform Callbacks
+//--------------------------------------------------------------------
+static void pico_switch_platform_init(int argc, const char **argv) {
     ARG_UNUSED(argc);
     ARG_UNUSED(argv);
 
-    logi("my_platform: init()\n");
+    logi("pico_switch_platform: init() Pro Controller mode\n");
+    connected_controllers = 0;
 
-	connected_controllers = 0;
-
-	uni_gamepad_mappings_t mappings = GAMEPAD_DEFAULT_MAPPINGS;
-
-	// remaps
-	mappings.button_b = UNI_GAMEPAD_MAPPINGS_BUTTON_A;
-	mappings.button_a = UNI_GAMEPAD_MAPPINGS_BUTTON_B;
-	mappings.button_y = UNI_GAMEPAD_MAPPINGS_BUTTON_X;
-	mappings.button_x = UNI_GAMEPAD_MAPPINGS_BUTTON_Y;
-
-	uni_gamepad_set_mappings(&mappings);
-
-	idx_r.idx = 0;
-	idx_r.report.buttons = 0;
-	idx_r.report.hat = SWITCH_HAT_NOTHING;
-	idx_r.report.lx = 0;
-	idx_r.report.ly = 0;
-	idx_r.report.rx = 0;
-	idx_r.report.ry = 0;
-	set_global_gamepad_report(&idx_r);
-
+    idx_state.idx = 0;
+    empty_procon_state(&idx_state.state);
+    set_global_procon_state(&idx_state);
 }
 
 static void pico_switch_platform_on_init_complete(void) {
-    logi("my_platform: on_init_complete()\n");
+    logi("pico_switch_platform: on_init_complete()\n");
 
-    // Safe to call "unsafe" functions since they are called from BT thread
-
-    // Start scanning
+    // Enable Bluetooth pairing
     uni_bt_enable_new_connections_unsafe(true);
+    uni_bt_del_keys_unsafe();
 
-    // Based on runtime condition you can delete or list the stored BT keys.
-    if (1)
-        uni_bt_del_keys_unsafe();
-    else
-        uni_bt_list_keys_unsafe();
-
-    // Turn off LED once init is done.
+    // Turn off LED until devices connect
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
 
-	logi("BLUEPAD: ready to fill reports");
-	multicore_fifo_push_blocking(0); // signal other core to start reading
+    logi("BLUEPAD: Pro Controller ready for keyboard and mouse\n");
+    multicore_fifo_push_blocking(0);
 }
 
-static void pico_switch_platform_on_device_connected(uni_hid_device_t* d) {
-    logi("my_platform: device connected: %p\n", d);
+static void pico_switch_platform_on_device_connected(uni_hid_device_t *d) {
+    logi("pico_switch_platform: device connected: %p\n", d);
 }
 
-static void pico_switch_platform_on_device_disconnected(uni_hid_device_t* d) {
-    logi("my_platform: device disconnected: %p\n", d);
-	// NOT WORKING?
-	// This is complicated. uni_hid_device_get_idx_for_instance 
-	// no longer gives us the index once the device is disconnected.
-	// We assume in this case that a device disconnecting is in a state of no gameplay
-	// so we set momentarelly all gamepad reports to 0.
-	// If this disconnection happens during gameplay, the gamepad would be stuck in the last state.
-	for (int i = 0; i < CONFIG_BLUEPAD32_MAX_DEVICES; i++) {
-		empty_gamepad_report(&report[i]);
-		idx_r.idx = i;
-		idx_r.report = report[i];
-		set_global_gamepad_report(&idx_r);
-	}
-	connected_controllers--;
-	set_led_status();
+static void pico_switch_platform_on_device_disconnected(uni_hid_device_t *d) {
+    logi("pico_switch_platform: device disconnected: %p\n", d);
+
+    if (connected_controllers > 0) {
+        connected_controllers--;
+    }
+    set_led_status();
+
+    idx_state.idx = 0;
+    empty_procon_state(&idx_state.state);
+    set_global_procon_state(&idx_state);
 }
 
-static uni_error_t pico_switch_platform_on_device_ready(uni_hid_device_t* d) {
-    logi("my_platform: device ready: %p\n", d);
+static uni_error_t pico_switch_platform_on_device_ready(uni_hid_device_t *d) {
+    logi("pico_switch_platform: device ready: %p\n", d);
 
-	connected_controllers++;
-	set_led_status();
+    connected_controllers++;
+    set_led_status();
     return UNI_ERROR_SUCCESS;
 }
 
-static void pico_switch_platform_on_controller_data(uni_hid_device_t* d, uni_controller_t* ctl)
-{
-	uint8_t idx = 0;
-    CombinedControllerState* state = &combined_states[idx];
+static void pico_switch_platform_on_controller_data(uni_hid_device_t *d, uni_controller_t *ctl) {
+    ARG_UNUSED(d);
+    uint8_t idx = 0;
+    CombinedControllerState *state = &combined_states[idx];
 
-    // Update input state
-    if (ctl->klass == UNI_CONTROLLER_CLASS_KEYBOARD) 
-	{
+    if (ctl->klass == UNI_CONTROLLER_CLASS_KEYBOARD) {
         state->has_keyboard = true;
         state->keyboard = ctl->keyboard;
-    } 
-	else if (ctl->klass == UNI_CONTROLLER_CLASS_MOUSE) 
-	{
+    } else if (ctl->klass == UNI_CONTROLLER_CLASS_MOUSE) {
         state->has_mouse = true;
         state->mouse = ctl->mouse;
     }
 
-	//empty report
-	empty_gamepad_report(&report[idx]);
+    empty_procon_state(&idx_state.state);
 
-	//fill report with new mouse and keyboard data
-    if (state->has_keyboard)
-	{
-		fill_gamepad_report_from_keyboard(idx, &state->keyboard);
-	}
-        
-    if (state->has_mouse)
-	{
-        fill_gamepad_report_from_mouse(idx, &state->mouse);
-	}
+    if (state->has_keyboard) {
+        fill_procon_from_keyboard(&idx_state.state, &state->keyboard);
+    }
 
-    idx_r.idx = idx;
-    idx_r.report = report[idx];
-    set_global_gamepad_report(&idx_r);
+    if (state->has_mouse) {
+        fill_procon_from_mouse(&idx_state.state, &state->mouse);
+    } else {
+        procon_pack_stick(&idx_state.state.stick[3], current_rx, current_ry);
+    }
 
+    idx_state.idx = idx;
+    set_global_procon_state(&idx_state);
 }
 
-static const uni_property_t* pico_switch_platform_get_property(uni_property_idx_t idx) {
-    // Deprecated
+static const uni_property_t *pico_switch_platform_get_property(uni_property_idx_t idx) {
     ARG_UNUSED(idx);
     return NULL;
 }
 
-static void pico_switch_platform_on_oob_event(uni_platform_oob_event_t event, void* data) {
-	ARG_UNUSED(event);
-	ARG_UNUSED(data);
-	return;
+static void pico_switch_platform_on_oob_event(uni_platform_oob_event_t event, void *data) {
+    ARG_UNUSED(event);
+    ARG_UNUSED(data);
 }
 
-//
-// Helpers - UNUSED
-//
-static void trigger_event_on_gamepad(uni_hid_device_t* d) {
-    if (d->report_parser.set_player_leds != NULL) {
-        static uint8_t led = 0;
-        led += 1;
-        led &= 0xf;
-        d->report_parser.set_player_leds(d, led);
-    }
-
-    if (d->report_parser.set_lightbar_color != NULL) {
-        static uint8_t red = 0x10;
-        static uint8_t green = 0x20;
-        static uint8_t blue = 0x40;
-
-        red += 0x10;
-        green -= 0x20;
-        blue += 0x40;
-        d->report_parser.set_lightbar_color(d, red, green, blue);
-    }
-}
-
-//
 // Entry Point
-//
-struct uni_platform* get_my_platform(void) {
+struct uni_platform *get_my_platform(void) {
     static struct uni_platform plat = {
-        .name = "My Platform",
+        .name = "PicoSwitch Pro Controller Platform",
         .init = pico_switch_platform_init,
         .on_init_complete = pico_switch_platform_on_init_complete,
         .on_device_connected = pico_switch_platform_on_device_connected,
