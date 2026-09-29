@@ -46,6 +46,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 # Common Pro Controller protocol & synchronization sources
 set(COMMON_SOURCES
     src/main.c
+    src/adapter_led.c
     src/usb_descriptors.c
     src/procon.c
     src/report.c
@@ -110,5 +111,5 @@ else()
 endif()
 
 pico_enable_stdio_usb(SwitchKMAdapter 0)
-pico_enable_stdio_uart(SwitchKMAdapter 0)
+pico_enable_stdio_uart(SwitchKMAdapter 1)
 pico_add_extra_outputs(SwitchKMAdapter)

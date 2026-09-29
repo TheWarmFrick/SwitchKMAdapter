@@ -5,11 +5,18 @@
 
 #include "procon.h"
 #include <string.h>
+#include <stdio.h>
 #include "pico/time.h"
 #include "pico/unique_id.h"
 #include "tusb.h"
 #include "report.h"
 #include "SwitchDescriptors.h"
+#include "adapter_config.h"
+#include "adapter_led.h"
+
+#if (ADAPTER_INPUT_BACKEND == BACKEND_USB_HOST)
+#include "usb_host_backend.h"
+#endif
 
 // Each 0x30 report carries 3 IMU frames of 5 ms, so reports are sent every 15 ms
 // matching real Pro Controller report cadence and game sensor-fusion filters.
@@ -143,20 +150,34 @@ static void handle_usb_cmd(uint8_t const *buf, uint16_t len) {
             reply_buf[3] = 0x03; // Pro Controller
             for (int i = 0; i < 6; i++) reply_buf[4 + i] = mac[5 - i];
             reply_pending = true;
+#if ENABLE_UART_DEBUG
+            printf("[SWITCH] MAC Request 0x80/0x01 -> Pro Controller\n");
+#endif
             break;
 
         case 0x02: // handshake
         case 0x03: // baud rate ack (UART legacy, ack)
             reply_pending = true;
+#if ENABLE_UART_DEBUG
+            printf("[SWITCH] Handshake 0x80/0x%02X acked\n", buf[1]);
+#endif
             break;
 
         case 0x04: // force USB HID only -> start streaming
             streaming = true;
+            adapter_led_set_switch_active(true);
             next_report = get_absolute_time();
+#if ENABLE_UART_DEBUG
+            printf("[SWITCH] Started streaming 0x30 Pro Controller reports!\n");
+#endif
             break;
 
         case 0x05: // allow timeout -> stop streaming
             streaming = false;
+            adapter_led_set_switch_active(false);
+#if ENABLE_UART_DEBUG
+            printf("[SWITCH] Stopped streaming reports\n");
+#endif
             break;
 
         default:
@@ -201,7 +222,11 @@ static void handle_subcmd(uint8_t const *buf, uint16_t len) {
         case 0x03: // set input report mode
             if (len > 11 && buf[11] == 0x30) {
                 streaming = true;
+                adapter_led_set_switch_active(true);
                 next_report = get_absolute_time();
+#if ENABLE_UART_DEBUG
+                printf("[SWITCH] Set input mode 0x30 -> active!\n");
+#endif
             }
             break;
 
@@ -240,6 +265,10 @@ static void handle_subcmd(uint8_t const *buf, uint16_t len) {
     reply_buf[13] = ack;
     reply_buf[14] = sub;
     reply_pending = true;
+
+#if ENABLE_UART_DEBUG
+    printf("[SWITCH] Subcommand: 0x%02X -> Ack 0x%02X\n", sub, ack);
+#endif
 }
 
 //--------------------------------------------------------------------
@@ -296,18 +325,28 @@ uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
 void tud_umount_cb(void) {
     streaming = false;
     reply_pending = false;
+    adapter_led_set_switch_active(false);
+#if ENABLE_UART_DEBUG
+    printf("[SWITCH] USB unmounted\n");
+#endif
 }
 
 void tud_suspend_cb(bool remote_wakeup_en) {
     (void)remote_wakeup_en;
     streaming = false;
     reply_pending = false;
+    adapter_led_set_switch_active(false);
+#if ENABLE_UART_DEBUG
+    printf("[SWITCH] USB suspended\n");
+#endif
 }
 
 //--------------------------------------------------------------------
 // Main Pro Controller USB Task (called on Core 0)
 //--------------------------------------------------------------------
 void procon_task(void) {
+    adapter_led_task();
+
     if (!tud_hid_ready()) return;
 
     // Send pending handshake or subcommand replies in response to host requests
@@ -322,8 +361,12 @@ void procon_task(void) {
 
     next_report = make_timeout_time_us(REPORT_INTERVAL_US);
 
-    // Fetch the latest global controller state safely from Core 1
+    // Fetch the latest controller state safely
+#if (ADAPTER_INPUT_BACKEND == BACKEND_USB_HOST)
+    usb_host_get_procon_state(&last_idx_state.state);
+#else
     get_global_procon_state(&last_idx_state);
+#endif
 
     uint8_t rpt[64];
     memset(rpt, 0, sizeof(rpt));

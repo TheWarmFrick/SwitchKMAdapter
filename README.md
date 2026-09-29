@@ -108,7 +108,50 @@ cmake -B build -DPICO_BOARD=pico_w -DADAPTER_INPUT_BACKEND=WIRELESS_BT
 
 ---
 
+## 🔍 USB Host Debugging & Diagnostics
+
+SwitchKMAdapter includes built-in hardware diagnostics (Onboard LED states and UART Serial Monitor) to verify USB input:
+
+### 1. Onboard Status LED (GPIO 25)
+The onboard LED provides instant visual feedback without needing any extra tools:
+
+| LED Pattern | Meaning | Next Step |
+| :--- | :--- | :--- |
+| **Calm Heartbeat** (1 pulse / sec) | Standby mode. Pico is running, but no USB devices are detected on GP2/GP3. | Check OTG cable, 5V power, and verify mouse is plugged in. |
+| **Rapid Double-Blink** (2 pulses / sec) | Nintendo Switch is connected and streaming, but **no keyboard or mouse is detected**. | Verify GP2 (D+) and GP3 (D-) wiring polarity. |
+| **Solid ON** | **USB Device Mounted!** Pico-PIO-USB successfully enumerated your keyboard or mouse. | Ready to play. |
+| **Flicker / Dip** | **Active Input Packets!** Toggles briefly whenever a key is pressed or mouse is moved. | Confirms reports are streaming into the Pro Controller engine. |
+
+### 2. Live UART Serial Logging (GP0 @ 115200 Baud)
+You can view real-time debug messages by connecting any USB-to-UART serial adapter (or FTDI/CH340 dongle) to the Pico:
+- **TX Pin:** **GPIO 0** (Physical Pin 1 on Pico) $\rightarrow$ Connect to **RX** on your USB-to-Serial adapter.
+- **GND Pin:** **Pin 3 or 8** $\rightarrow$ Connect to **GND** on your adapter.
+- **Baud Rate:** `115200 8N1` (use PuTTY, minicom, or `picocom /dev/ttyUSB0 -b 115200`).
+
+#### Example UART Live Output:
+```text
+==================================================
+ SwitchKMAdapter Firmware Starting (USB Host Mode)
+ - SysClock:  120 MHz
+ - Host D+:   GP2 (Physical Pin 4)
+ - Host D-:   GP3 (Physical Pin 5)
+ - UART TX:   GP0 (Physical Pin 1) @ 115200 baud
+ - Status LED: GP25
+==================================================
+
+[HOST] Pico-PIO-USB Host Initialized!
+[HOST] MOUNTED dev=1 inst=0: MOUSE (layout_valid=1)
+[SWITCH] Handshake 0x80/0x02 acked
+[SWITCH] Set input mode 0x30 -> active!
+[SWITCH] Started streaming 0x30 Pro Controller reports!
+[INPUT] Mouse: dx=12 dy=-4 btn=0x01 | Stick L(2048,2048) R(2528,2208)
+```
+
+---
+
 ## 🗺️ Roadmap
 - [x] **Phase 1**: Official Nintendo Switch Pro Controller protocol emulation (`0x057E:0x2009`), 12-bit stick scaling, right stick camera sweeps, and automated GitHub Actions CI.
 - [x] **Input Backend Toggle**: Configurable Wired USB Host (Pico-PIO-USB on GP2/GP3) vs Wireless Bluetooth (CYW43 Bluepad32) with dual CI builds.
+- [x] **Hardware Debugging & Diagnostics**: Built-in status LED state machine and live UART serial monitor at 115200 baud.
 - [ ] **Phase 2**: Mouse-to-gyro 6-axis IMU sensor fusion (nxic-pico math model: angle-preserving accumulator, gravity vector tracking, 3-frame 5ms sub-sampling, pitch reset key).
+

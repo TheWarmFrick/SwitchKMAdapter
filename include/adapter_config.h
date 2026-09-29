@@ -24,4 +24,16 @@
 // System clock for Pico-PIO-USB (requires a multiple of 12 MHz; 120 MHz recommended)
 #define USB_HOST_SYS_CLOCK_KHZ 120000
 
+// Hardware Activity & Status LED
+// On standard Raspberry Pi Pico, GPIO 25 is the onboard green LED.
+// Set to -1 if using Pico W with USB Host (where GP25 is used by CYW43 SPI) unless an external LED is wired.
+#ifndef PIN_DEBUG_LED
+#define PIN_DEBUG_LED 25
+#endif
+
+// Real-Time UART Serial Debugging on GP0 (TX) and GP1 (RX) at 115200 baud
+#ifndef ENABLE_UART_DEBUG
+#define ENABLE_UART_DEBUG 1
+#endif
+
 #endif // ADAPTER_CONFIG_H_

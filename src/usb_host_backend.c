@@ -9,6 +9,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include "pico/stdlib.h"
 #include "pico/sync.h"
@@ -19,10 +20,11 @@
 #include "report.h"
 #include "SwitchDescriptors.h"
 #include "KeyboardKeys.h"
+#include "adapter_led.h"
 
 // 12-bit analog stick sensitivity & timing constants
 #define MOUSE_STICK_SENSITIVITY 40
-#define MOUSE_IDLE_TIMEOUT_MS 35
+#define MOUSE_IDLE_TIMEOUT_MS   35
 
 //--------------------------------------------------------------------
 // Mouse report layout extracted from the HID report descriptor
@@ -57,12 +59,16 @@ static int32_t acc_dy = 0;
 static uint32_t last_mouse_move_time_ms = 0;
 static uint16_t current_rx = STICK_CENTER;
 static uint16_t current_ry = STICK_CENTER;
-
-static ProconIdxState idx_state;
+static uint8_t active_device_count = 0;
 
 void usb_host_init(void) {
     critical_section_init(&hid_lock);
     memset(slots, 0, sizeof(slots));
+    active_device_count = 0;
+}
+
+uint8_t usb_host_get_device_count(void) {
+    return active_device_count;
 }
 
 static slot_t *find_slot(uint8_t dev_addr, uint8_t instance) {
@@ -74,8 +80,17 @@ static slot_t *find_slot(uint8_t dev_addr, uint8_t instance) {
     return NULL;
 }
 
+static void update_device_count(void) {
+    uint8_t count = 0;
+    for (int i = 0; i < CFG_TUH_HID; i++) {
+        if (slots[i].used) count++;
+    }
+    active_device_count = count;
+    adapter_led_set_devices_mounted(count);
+}
+
 //--------------------------------------------------------------------
-// Minimal HID report descriptor parser for mice
+// Minimal HID report descriptor parser for mice (handles gaming mice)
 //--------------------------------------------------------------------
 #define MAX_REPORT_IDS 8
 
@@ -100,6 +115,7 @@ static bool parse_mouse_desc(uint8_t const *d, uint16_t len, mouse_layout_t *out
     uint16_t usages[8];
     int nusages = 0;
     uint32_t rsize = 0, rcount = 0;
+    bool seen_collection = false;
     uint8_t xy_id = 0, btn_id = 0;
 
     memset(out, 0, sizeof(*out));
@@ -108,50 +124,57 @@ static bool parse_mouse_desc(uint8_t const *d, uint16_t len, mouse_layout_t *out
     uint16_t pos = 0;
     while (pos < len) {
         uint8_t prefix = d[pos++];
-        if (prefix == 0xFE) {
+        if (prefix == 0xFE) { // Long item: skip
             if (pos >= len) break;
-            pos += 1 + d[pos];
+            uint8_t dlen = d[pos];
+            pos = (uint16_t)(pos + 2 + dlen);
             continue;
         }
-        uint8_t size = prefix & 0x03;
-        if (size == 3) size = 4;
-        if (pos + size > len) break;
-
+        uint8_t isize = prefix & 3;
+        if (isize == 3) isize = 4;
+        if (pos + isize > len) break;
         uint32_t data = 0;
-        for (uint8_t i = 0; i < size; i++) data |= (uint32_t)d[pos++] << (i * 8);
+        for (uint8_t i = 0; i < isize; i++) data |= (uint32_t)d[pos + i] << (8 * i);
+        pos = (uint16_t)(pos + isize);
 
-        uint8_t type = (prefix >> 2) & 0x03;
-        uint8_t tag  = (prefix >> 4) & 0x0F;
+        uint8_t type = (prefix >> 2) & 3;
+        uint8_t tag  = prefix >> 4;
 
         if (type == 1) { // Global
             switch (tag) {
-                case 0x00: usage_page = (uint16_t)data; break;
-                case 0x07: rsize = data; break;
-                case 0x08: cur_id = (uint8_t)data; any_id = true; break;
-                case 0x09: rcount = data; break;
+                case 0: usage_page = (uint16_t)data; break;
+                case 7: rsize = data; break;
+                case 8: cur_id = (uint8_t)data; any_id = true; break;
+                case 9: rcount = data; break;
                 default: break;
             }
         } else if (type == 2) { // Local
-            if (tag == 0x00 && nusages < 8) {
-                usages[nusages++] = (uint16_t)data;
-            }
+            if (tag == 0 && nusages < 8) usages[nusages++] = (uint16_t)data;
         } else if (type == 0) { // Main
-            if (tag == 0x08) { // Input
+            if (tag == 0xA) { // Collection
+                if (!seen_collection && usage_page == 0x01 && nusages > 0 &&
+                    (usages[0] == 0x02 || usages[0] == 0x01)) {
+                    out->is_mouse = (usages[0] == 0x02);
+                }
+                seen_collection = true;
+            } else if (tag == 8) { // Input
                 uint16_t *cur = cursor_for(cur_id, ids, curs, &ncurs);
-                if (cur && !(data & 0x01)) { // variable data
-                    if (usage_page == 0x01) { // Generic Desktop
-                        for (int i = 0; i < nusages && i < (int)rcount; i++) {
-                            uint16_t u = usages[i];
+                if (!cur) return false;
+                bool constant = (data & 1) != 0;
+                if (!constant) {
+                    if (usage_page == 0x01) { // Generic Desktop (X / Y)
+                        for (uint32_t i = 0; i < rcount; i++) {
+                            uint16_t u = (i < (uint32_t)nusages)
+                                             ? usages[i]
+                                             : (nusages ? usages[nusages - 1] : 0);
                             uint16_t off = (uint16_t)(*cur + i * rsize);
-                            if (u == 0x02) out->is_mouse = true;
-                            if (u == 0x30) { // X
+                            if (u == 0x30 && out->x_size == 0) {
                                 out->x_off = off;
                                 out->x_size = (uint8_t)rsize;
                                 xy_id = cur_id;
-                            } else if (u == 0x31) { // Y
+                            } else if (u == 0x31 && out->y_size == 0) {
                                 out->y_off = off;
                                 out->y_size = (uint8_t)rsize;
-                                xy_id = cur_id;
                             }
                         }
                     } else if (usage_page == 0x09 && out->btn_count == 0 && rsize == 1) {
@@ -160,7 +183,7 @@ static bool parse_mouse_desc(uint8_t const *d, uint16_t len, mouse_layout_t *out
                         btn_id = cur_id;
                     }
                 }
-                if (cur) *cur = (uint16_t)(*cur + rsize * rcount);
+                *cur = (uint16_t)(*cur + rsize * rcount);
             }
             nusages = 0;
         }
@@ -218,10 +241,11 @@ static void handle_layout_mouse(slot_t *s, uint8_t const *report, uint16_t len) 
         }
     }
     critical_section_exit(&hid_lock);
+    adapter_led_notify_activity();
 }
 
 //--------------------------------------------------------------------
-// TinyUSB Host Callbacks
+// TinyUSB Host Callbacks (run on Core 1)
 //--------------------------------------------------------------------
 void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance,
                       uint8_t const *desc_report, uint16_t desc_len) {
@@ -233,7 +257,13 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance,
     bool is_kbd = (itf_protocol == HID_ITF_PROTOCOL_KEYBOARD);
     bool is_mouse = (itf_protocol == HID_ITF_PROTOCOL_MOUSE) ||
                     (parsed && lay.is_mouse);
-    if (!is_kbd && !is_mouse) return;
+    if (!is_kbd && !is_mouse) {
+#if ENABLE_UART_DEBUG
+        printf("[USB-H] Mount ignored: dev=%d inst=%d (proto=%d, not kbd/mouse)\n",
+               dev_addr, instance, itf_protocol);
+#endif
+        return;
+    }
 
     critical_section_enter_blocking(&hid_lock);
     slot_t *s = find_slot(dev_addr, instance);
@@ -259,6 +289,13 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance,
     critical_section_exit(&hid_lock);
     if (!s) return;
 
+    update_device_count();
+
+#if ENABLE_UART_DEBUG
+    printf("[USB-H] MOUNTED dev=%d inst=%d: %s (layout_valid=%d)\n",
+           dev_addr, instance, is_kbd ? "KEYBOARD" : "MOUSE", lay.valid);
+#endif
+
     if (is_kbd || !s->use_layout) {
         if (tuh_hid_get_protocol(dev_addr, instance) != HID_PROTOCOL_BOOT) {
             tuh_hid_set_protocol(dev_addr, instance, HID_PROTOCOL_BOOT);
@@ -272,6 +309,12 @@ void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance) {
     slot_t *s = find_slot(dev_addr, instance);
     if (s) memset(s, 0, sizeof(*s));
     critical_section_exit(&hid_lock);
+
+    update_device_count();
+
+#if ENABLE_UART_DEBUG
+    printf("[USB-H] UNMOUNTED dev=%d inst=%d\n", dev_addr, instance);
+#endif
 }
 
 static bool valid_boot_kb_report(uint8_t const *report, uint16_t len) {
@@ -293,6 +336,7 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance,
                 critical_section_enter_blocking(&hid_lock);
                 memcpy(&s->kb, report, sizeof(hid_keyboard_report_t));
                 critical_section_exit(&hid_lock);
+                adapter_led_notify_activity();
             }
         } else if (s->use_layout) {
             handle_layout_mouse(s, report, len);
@@ -304,13 +348,14 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance,
             acc_dx += m->x;
             acc_dy += m->y;
             critical_section_exit(&hid_lock);
+            adapter_led_notify_activity();
         }
     }
     tuh_hid_receive_report(dev_addr, instance);
 }
 
 //--------------------------------------------------------------------
-// Input Translation -> Pro Controller State
+// State Aggregation -> Pro Controller State (Called on Core 0 every 15 ms)
 //--------------------------------------------------------------------
 static uint16_t clamp_stick_12(int val) {
     if (val < STICK_MIN) return STICK_MIN;
@@ -318,18 +363,18 @@ static uint16_t clamp_stick_12(int val) {
     return (uint16_t)val;
 }
 
-static void usb_host_update_procon(void) {
-    ProconState st;
-    memset(&st, 0, sizeof(st));
+void usb_host_get_procon_state(ProconState *st) {
+    if (!st) return;
+    memset(st, 0, sizeof(*st));
 
     // Baseline IMU: Resting flat on table (+4096 on Z, 0 gyro)
     for (int f = 0; f < 3; f++) {
-        st.imu[f][0] = 0;
-        st.imu[f][1] = 0;
-        st.imu[f][2] = 4096;
-        st.imu[f][3] = 0;
-        st.imu[f][4] = 0;
-        st.imu[f][5] = 0;
+        st->imu[f][0] = 0;
+        st->imu[f][1] = 0;
+        st->imu[f][2] = 4096;
+        st->imu[f][3] = 0;
+        st->imu[f][4] = 0;
+        st->imu[f][5] = 0;
     }
 
     bool up = false, down = false, left = false, right = false;
@@ -338,13 +383,18 @@ static void usb_host_update_procon(void) {
     int32_t dx = 0, dy = 0;
 
     critical_section_enter_blocking(&hid_lock);
+    dx = acc_dx;
+    dy = acc_dy;
+    acc_dx = 0;
+    acc_dy = 0;
+
     for (int i = 0; i < CFG_TUH_HID; i++) {
         if (!slots[i].used) continue;
 
         if (slots[i].itf_protocol == HID_ITF_PROTOCOL_KEYBOARD) {
             uint8_t mods = slots[i].kb.modifier;
-            if (mods & KEYBOARD_MODIFIER_LEFTSHIFT)  st.btn[1] |= PROCON_BTN1_LCLICK; // L3
-            if (mods & KEYBOARD_MODIFIER_LEFTCTRL)   st.btn[1] |= PROCON_BTN1_RCLICK; // R3
+            if (mods & KEYBOARD_MODIFIER_LEFTSHIFT)  st->btn[1] |= PROCON_BTN1_LCLICK; // L3
+            if (mods & KEYBOARD_MODIFIER_LEFTCTRL)   st->btn[1] |= PROCON_BTN1_RCLICK; // R3
 
             for (int k = 0; k < 6; k++) {
                 uint8_t key = slots[i].kb.keycode[k];
@@ -352,10 +402,10 @@ static void usb_host_update_procon(void) {
 
                 switch (key) {
                     // Face buttons
-                    case KEY_Q:     st.btn[0] |= PROCON_BTN0_A; break;
-                    case KEY_SPACE: st.btn[0] |= PROCON_BTN0_B; break;
-                    case KEY_R:     st.btn[0] |= PROCON_BTN0_X; break;
-                    case KEY_E:     st.btn[0] |= PROCON_BTN0_Y; break;
+                    case KEY_Q:     st->btn[0] |= PROCON_BTN0_A; break;
+                    case KEY_SPACE: st->btn[0] |= PROCON_BTN0_B; break;
+                    case KEY_R:     st->btn[0] |= PROCON_BTN0_X; break;
+                    case KEY_E:     st->btn[0] |= PROCON_BTN0_Y; break;
 
                     // Left Stick (WASD)
                     case KEY_W: up = true; break;
@@ -370,15 +420,15 @@ static void usb_host_update_procon(void) {
                     case KEY_RIGHT: cam_right = true; break;
 
                     // D-Pad
-                    case KEY_F: st.btn[2] |= PROCON_BTN2_UP; break;
-                    case KEY_B: st.btn[2] |= PROCON_BTN2_DOWN; break;
-                    case KEY_I: st.btn[2] |= PROCON_BTN2_RIGHT; break;
+                    case KEY_F: st->btn[2] |= PROCON_BTN2_UP; break;
+                    case KEY_B: st->btn[2] |= PROCON_BTN2_DOWN; break;
+                    case KEY_I: st->btn[2] |= PROCON_BTN2_RIGHT; break;
 
                     // System
-                    case KEY_TAB: st.btn[1] |= PROCON_BTN1_MINUS; break;
-                    case KEY_ESC: st.btn[1] |= PROCON_BTN1_PLUS; break;
-                    case KEY_H:   st.btn[1] |= PROCON_BTN1_HOME; break;
-                    case KEY_C:   st.btn[1] |= PROCON_BTN1_CAPTURE; break;
+                    case KEY_TAB: st->btn[1] |= PROCON_BTN1_MINUS; break;
+                    case KEY_ESC: st->btn[1] |= PROCON_BTN1_PLUS; break;
+                    case KEY_H:   st->btn[1] |= PROCON_BTN1_HOME; break;
+                    case KEY_C:   st->btn[1] |= PROCON_BTN1_CAPTURE; break;
                     default: break;
                 }
             }
@@ -386,19 +436,14 @@ static void usb_host_update_procon(void) {
             combined_mouse_buttons |= slots[i].mouse_buttons;
         }
     }
-
-    dx = acc_dx;
-    dy = acc_dy;
-    acc_dx = 0;
-    acc_dy = 0;
     critical_section_exit(&hid_lock);
 
     // Mouse Buttons
-    if (combined_mouse_buttons & MOUSE_BUTTON_LEFT)     st.btn[0] |= PROCON_BTN0_ZR;
-    if (combined_mouse_buttons & MOUSE_BUTTON_RIGHT)    st.btn[2] |= PROCON_BTN2_ZL;
-    if (combined_mouse_buttons & MOUSE_BUTTON_MIDDLE)   st.btn[2] |= PROCON_BTN2_LEFT;
-    if (combined_mouse_buttons & MOUSE_BUTTON_BACKWARD) st.btn[2] |= PROCON_BTN2_L;
-    if (combined_mouse_buttons & MOUSE_BUTTON_FORWARD)  st.btn[0] |= PROCON_BTN0_R;
+    if (combined_mouse_buttons & MOUSE_BUTTON_LEFT)     st->btn[0] |= PROCON_BTN0_ZR;
+    if (combined_mouse_buttons & MOUSE_BUTTON_RIGHT)    st->btn[2] |= PROCON_BTN2_ZL;
+    if (combined_mouse_buttons & MOUSE_BUTTON_MIDDLE)   st->btn[2] |= PROCON_BTN2_LEFT;
+    if (combined_mouse_buttons & MOUSE_BUTTON_BACKWARD) st->btn[2] |= PROCON_BTN2_L;
+    if (combined_mouse_buttons & MOUSE_BUTTON_FORWARD)  st->btn[0] |= PROCON_BTN0_R;
 
     // Left Stick calculation
     uint16_t lx = STICK_CENTER;
@@ -407,7 +452,7 @@ static void usb_host_update_procon(void) {
     else if (right && !left) lx = STICK_MAX;
     if (down && !up) ly = STICK_MIN;
     else if (up && !down) ly = STICK_MAX;
-    procon_pack_stick(&st.stick[0], lx, ly);
+    procon_pack_stick(&st->stick[0], lx, ly);
 
     // Right Stick calculation (Mouse delta + Arrow key fallback)
     uint32_t now = to_ms_since_boot(get_absolute_time());
@@ -427,13 +472,21 @@ static void usb_host_update_procon(void) {
     if (cam_down && !cam_up) final_ry = STICK_MIN;
     else if (cam_up && !cam_down) final_ry = STICK_MAX;
 
-    procon_pack_stick(&st.stick[3], final_rx, final_ry);
+    procon_pack_stick(&st->stick[3], final_rx, final_ry);
 
-    memcpy(&idx_state.state, &st, sizeof(st));
-    set_global_procon_state(&idx_state);
+#if ENABLE_UART_DEBUG
+    static uint32_t last_log_ms = 0;
+    if ((dx != 0 || dy != 0 || combined_mouse_buttons != 0) && (now - last_log_ms >= 200)) {
+        last_log_ms = now;
+        printf("[INPUT] Mouse: dx=%ld dy=%ld btn=0x%02X | Stick L(%u,%u) R(%u,%u)\n",
+               dx, dy, combined_mouse_buttons, lx, ly, final_rx, final_ry);
+    }
+#endif
 }
 
-// Core 1 main task for USB Host
+//--------------------------------------------------------------------
+// Core 1 main task for USB Host (Pico-PIO-USB)
+//--------------------------------------------------------------------
 void usb_host_core1_task(void) {
     sleep_ms(10);
 
@@ -442,9 +495,17 @@ void usb_host_core1_task(void) {
     tuh_configure(BOARD_TUH_RHPORT, TUH_CFGID_RPI_PIO_USB_CONFIGURATION, &pio_cfg);
     tuh_init(BOARD_TUH_RHPORT);
 
+#if ENABLE_UART_DEBUG
+    printf("\n=========================================\n");
+    printf("[HOST] Pico-PIO-USB Host Initialized!\n");
+    printf("[HOST] D+ Pin: GP%d (Pin %d), D- Pin: GP%d (Pin %d)\n",
+           PIN_USB_HOST_DP, PIN_USB_HOST_DP == 2 ? 4 : PIN_USB_HOST_DP + 1,
+           PIN_USB_HOST_DM, PIN_USB_HOST_DM == 3 ? 5 : PIN_USB_HOST_DM + 1);
+    printf("=========================================\n\n");
+#endif
+
     for (;;) {
         tuh_task();
-        usb_host_update_procon();
     }
 }
 

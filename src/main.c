@@ -1,6 +1,8 @@
 #include <pico/stdlib.h>
 #include <pico/multicore.h>
+#include <stdio.h>
 #include "adapter_config.h"
+#include "adapter_led.h"
 #include "usb.h"
 #include "procon.h"
 
@@ -13,6 +15,20 @@ int main(void)
     // Pico-PIO-USB requires the system clock to be a multiple of 12 MHz (120 MHz standard)
     set_sys_clock_khz(USB_HOST_SYS_CLOCK_KHZ, true);
     stdio_init_all();
+
+    // Hardware status LED initialization
+    adapter_led_init();
+
+#if ENABLE_UART_DEBUG
+    printf("\n\n==================================================\n");
+    printf(" SwitchKMAdapter Firmware Starting (USB Host Mode)\n");
+    printf(" - SysClock:  %lu MHz\n", (unsigned long)(clock_get_hz(clk_sys) / 1000000));
+    printf(" - Host D+:   GP%d (Physical Pin 4)\n", PIN_USB_HOST_DP);
+    printf(" - Host D-:   GP%d (Physical Pin 5)\n", PIN_USB_HOST_DM);
+    printf(" - UART TX:   GP0  (Physical Pin 1) @ 115200 baud\n");
+    printf(" - Status LED: GP%d\n", PIN_DEBUG_LED);
+    printf("==================================================\n\n");
+#endif
 
     // Initialize Pro Controller data structures, unique MAC and SPI calibration ROM
     procon_init();
@@ -55,6 +71,11 @@ void bluepad_core_task(void)
 int main(void)
 {
     stdio_init_all();
+    adapter_led_init();
+
+#if ENABLE_UART_DEBUG
+    printf("\nSwitchKMAdapter Firmware Starting (Wireless Bluetooth Mode)\n");
+#endif
 
     // Initialize Pro Controller data structures, unique MAC and SPI calibration ROM
     procon_init();
