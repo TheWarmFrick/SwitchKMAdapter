@@ -1,6 +1,6 @@
 /*
  * Nintendo Switch Pro Controller USB Descriptors (VID 057E / PID 2009)
- * Compatible with Nintendo Switch OS and games.
+ * Modeled after official Nintendo Switch Pro Controller and GP2040-CE.
  */
 
 #include <stdio.h>
@@ -23,12 +23,15 @@ static tusb_desc_device_t const desc_device = {
     .bDeviceSubClass    = 0x00,
     .bDeviceProtocol    = 0x00,
     .bMaxPacketSize0    = CFG_TUD_ENDPOINT0_SIZE,
+
     .idVendor           = USB_VID,
     .idProduct          = USB_PID,
     .bcdDevice          = 0x0200,
+
     .iManufacturer      = 0x01,
     .iProduct           = 0x02,
     .iSerialNumber      = 0x03,
+
     .bNumConfigurations = 0x01,
 };
 
@@ -39,79 +42,98 @@ uint8_t const *tud_descriptor_device_cb(void) {
 //--------------------------------------------------------------------
 // HID Report Descriptor (authentic Nintendo Switch Pro Controller)
 //--------------------------------------------------------------------
-static uint8_t const desc_hid_report[] = {
-    0x05, 0x01,                   // Usage Page (Generic Desktop)
-    0x15, 0x00,                   // Logical Minimum (0)
-    0x09, 0x04,                   // Usage (Joystick)
-    0xA1, 0x01,                   // Collection (Application)
-    0x85, 0x30,                   //   Report ID (0x30) - full input report
-    0x05, 0x01,                   //   Usage Page (Generic Desktop)
-    0x05, 0x09,                   //   Usage Page (Button)
-    0x19, 0x01,                   //   Usage Minimum (1)
-    0x29, 0x0A,                   //   Usage Maximum (10)
-    0x15, 0x00, 0x25, 0x01,       //   Logical 0..1
-    0x75, 0x01, 0x95, 0x0A,       //   10 bits
-    0x55, 0x00, 0x65, 0x00,       //   Unit exponent / unit
-    0x81, 0x02,                   //   Input (Data,Var,Abs)
-    0x05, 0x09,                   //   Usage Page (Button)
-    0x19, 0x0B,                   //   Usage Minimum (11)
-    0x29, 0x0E,                   //   Usage Maximum (14)
-    0x15, 0x00, 0x25, 0x01,       //   Logical 0..1
-    0x75, 0x01, 0x95, 0x04,       //   4 bits
-    0x81, 0x02,                   //   Input (Data,Var,Abs)
-    0x75, 0x01, 0x95, 0x02,       //   2 bits
-    0x81, 0x03,                   //   Input (Const)
-    0x0B, 0x01, 0x00, 0x01, 0x00, //   Usage (vendor)
-    0xA1, 0x00,                   //   Collection (Physical)
-    0x0B, 0x30, 0x00, 0x01, 0x00, //     Usage (vendor: X)
-    0x0B, 0x31, 0x00, 0x01, 0x00, //     Usage (vendor: Y)
-    0x0B, 0x32, 0x00, 0x01, 0x00, //     Usage (vendor: Z)
-    0x0B, 0x35, 0x00, 0x01, 0x00, //     Usage (vendor: Rz)
-    0x15, 0x00,                   //     Logical Minimum (0)
-    0x27, 0xFF, 0xFF, 0x00, 0x00, //     Logical Maximum (65535)
-    0x75, 0x10, 0x95, 0x04,       //     4 x 16 bits
-    0x81, 0x02,                   //     Input (Data,Var,Abs)
-    0xC0,                         //   End Collection
-    0x0B, 0x39, 0x00, 0x01, 0x00, //   Usage (vendor: hat)
-    0x15, 0x00, 0x25, 0x07,       //   Logical 0..7
-    0x35, 0x00,                   //   Physical Minimum (0)
-    0x46, 0x3B, 0x01,             //   Physical Maximum (315)
-    0x65, 0x14,                   //   Unit (degrees)
-    0x75, 0x04, 0x95, 0x01,       //   4 bits
-    0x81, 0x02,                   //   Input (Data,Var,Abs)
-    0x05, 0x09,                   //   Usage Page (Button)
-    0x19, 0x0F, 0x29, 0x12,       //   Buttons 15..18
-    0x15, 0x00, 0x25, 0x01,       //   Logical 0..1
-    0x75, 0x01, 0x95, 0x04,       //   4 bits
-    0x81, 0x02,                   //   Input (Data,Var,Abs)
-    0x75, 0x08, 0x95, 0x34,       //   52 bytes padding
-    0x81, 0x03,                   //   Input (Const)
-    0x06, 0x00, 0xFF,             //   Usage Page (Vendor Defined)
-    0x85, 0x21,                   //   Report ID (0x21) - subcommand reply
-    0x09, 0x01,                   //   Usage (vendor)
-    0x75, 0x08, 0x95, 0x3F,       //   63 bytes
-    0x81, 0x03,                   //   Input (Const)
-    0x85, 0x81,                   //   Report ID (0x81) - USB command reply
-    0x09, 0x02,                   //   Usage (vendor)
-    0x75, 0x08, 0x95, 0x3F,       //   63 bytes
-    0x81, 0x03,                   //   Input (Const)
-    0x85, 0x01,                   //   Report ID (0x01) - rumble + subcommand
-    0x09, 0x03,                   //   Usage (vendor)
-    0x75, 0x08, 0x95, 0x3F,       //   63 bytes
-    0x91, 0x83,                   //   Output (Const,Volatile)
-    0x85, 0x10,                   //   Report ID (0x10) - rumble only
-    0x09, 0x04,                   //   Usage (vendor)
-    0x75, 0x08, 0x95, 0x3F,       //   63 bytes
-    0x91, 0x83,                   //   Output (Const,Volatile)
-    0x85, 0x80,                   //   Report ID (0x80) - USB command
-    0x09, 0x05,                   //   Usage (vendor)
-    0x75, 0x08, 0x95, 0x3F,       //   63 bytes
-    0x91, 0x83,                   //   Output (Const,Volatile)
-    0x85, 0x82,                   //   Report ID (0x82)
-    0x09, 0x06,                   //   Usage (vendor)
-    0x75, 0x08, 0x95, 0x3F,       //   63 bytes
-    0x91, 0x83,                   //   Output (Const,Volatile)
-    0xC0,                         // End Collection
+static const uint8_t desc_hid_report[] = {
+    0x05, 0x01,        // Usage Page (Generic Desktop Ctrls)
+    0x15, 0x00,        // Logical Minimum (0)
+    0x09, 0x04,        // Usage (Joystick)
+    0xA1, 0x01,        // Collection (Application)
+    0x85, 0x30,        //   Report ID (48)
+    0x05, 0x01,        //   Usage Page (Generic Desktop Ctrls)
+    0x05, 0x09,        //   Usage Page (Button)
+    0x19, 0x01,        //   Usage Minimum (0x01)
+    0x29, 0x0A,        //   Usage Maximum (0x0A)
+    0x15, 0x00,        //   Logical Minimum (0)
+    0x25, 0x01,        //   Logical Maximum (1)
+    0x75, 0x01,        //   Report Size (1)
+    0x95, 0x0A,        //   Report Count (10)
+    0x55, 0x00,        //   Unit Exponent (0)
+    0x65, 0x00,        //   Unit (None)
+    0x81, 0x02,        //   Input (Data,Var,Abs)
+    0x05, 0x09,        //   Usage Page (Button)
+    0x19, 0x0B,        //   Usage Minimum (0x0B)
+    0x29, 0x0E,        //   Usage Maximum (0x0E)
+    0x15, 0x00,        //   Logical Minimum (0)
+    0x25, 0x01,        //   Logical Maximum (1)
+    0x75, 0x01,        //   Report Size (1)
+    0x95, 0x04,        //   Report Count (4)
+    0x81, 0x02,        //   Input (Data,Var,Abs)
+    0x75, 0x01,        //   Report Size (1)
+    0x95, 0x02,        //   Report Count (2)
+    0x81, 0x03,        //   Input (Const,Var,Abs)
+    0x0B, 0x01, 0x00, 0x01, 0x00,  //   Usage (0x010001)
+    0xA1, 0x00,        //   Collection (Physical)
+    0x0B, 0x30, 0x00, 0x01, 0x00,  //     Usage (X)
+    0x0B, 0x31, 0x00, 0x01, 0x00,  //     Usage (Y)
+    0x0B, 0x32, 0x00, 0x01, 0x00,  //     Usage (Z)
+    0x0B, 0x35, 0x00, 0x01, 0x00,  //     Usage (Rz)
+    0x15, 0x00,        //     Logical Minimum (0)
+    0x27, 0xFF, 0xFF, 0x00, 0x00,  //     Logical Maximum (65534)
+    0x75, 0x10,        //     Report Size (16)
+    0x95, 0x04,        //     Report Count (4)
+    0x81, 0x02,        //     Input (Data,Var,Abs)
+    0xC0,              //   End Collection
+    0x0B, 0x39, 0x00, 0x01, 0x00,  //   Usage (Hat switch)
+    0x15, 0x00,        //   Logical Minimum (0)
+    0x25, 0x07,        //   Logical Maximum (7)
+    0x35, 0x00,        //   Physical Minimum (0)
+    0x46, 0x3B, 0x01,  //   Physical Maximum (315)
+    0x65, 0x14,        //   Unit (degrees)
+    0x75, 0x04,        //   Report Size (4)
+    0x95, 0x01,        //   Report Count (1)
+    0x81, 0x02,        //   Input (Data,Var,Abs)
+    0x05, 0x09,        //   Usage Page (Button)
+    0x19, 0x0F,        //   Usage Minimum (0x0F)
+    0x29, 0x12,        //   Usage Maximum (0x12)
+    0x15, 0x00,        //   Logical Minimum (0)
+    0x25, 0x01,        //   Logical Maximum (1)
+    0x75, 0x01,        //   Report Size (1)
+    0x95, 0x04,        //   Report Count (4)
+    0x81, 0x02,        //   Input (Data,Var,Abs)
+    0x75, 0x08,        //   Report Size (8)
+    0x95, 0x34,        //   Report Count (52)
+    0x81, 0x03,        //   Input (Const,Var,Abs)
+    0x06, 0x00, 0xFF,  //   Usage Page (Vendor Defined 0xFF00)
+    0x85, 0x21,        //   Report ID (33)
+    0x09, 0x01,        //   Usage (0x01)
+    0x75, 0x08,        //   Report Size (8)
+    0x95, 0x3F,        //   Report Count (63)
+    0x81, 0x03,        //   Input (Const,Var,Abs)
+    0x85, 0x81,        //   Report ID (-127)
+    0x09, 0x02,        //   Usage (0x02)
+    0x75, 0x08,        //   Report Size (8)
+    0x95, 0x3F,        //   Report Count (63)
+    0x81, 0x03,        //   Input (Const,Var,Abs)
+    0x85, 0x01,        //   Report ID (1)
+    0x09, 0x03,        //   Usage (0x03)
+    0x75, 0x08,        //   Report Size (8)
+    0x95, 0x3F,        //   Report Count (63)
+    0x91, 0x83,        //   Output (Const,Var,Abs,Volatile)
+    0x85, 0x10,        //   Report ID (16)
+    0x09, 0x04,        //   Usage (0x04)
+    0x75, 0x08,        //   Report Size (8)
+    0x95, 0x3F,        //   Report Count (63)
+    0x91, 0x83,        //   Output (Const,Var,Abs,Volatile)
+    0x85, 0x80,        //   Report ID (-128)
+    0x09, 0x05,        //   Usage (0x05)
+    0x75, 0x08,        //   Report Size (8)
+    0x95, 0x3F,        //   Report Count (63)
+    0x91, 0x83,        //   Output (Const,Var,Abs,Volatile)
+    0x85, 0x82,        //   Report ID (-126)
+    0x09, 0x06,        //   Usage (0x06)
+    0x75, 0x08,        //   Report Size (8)
+    0x95, 0x3F,        //   Report Count (63)
+    0x91, 0x83,        //   Output (Const,Var,Abs,Volatile)
+    0xC0,              // End Collection
 };
 
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance) {

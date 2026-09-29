@@ -10,7 +10,7 @@ on:
 
 jobs:
   build:
-    name: Build Pico W UF2
+    name: Build USB Host & Wireless UF2 Binaries
     runs-on: ubuntu-24.04
 
     steps:
@@ -33,33 +33,58 @@ jobs:
           path: pico-sdk
           submodules: recursive
 
-      - name: Configure CMake
+      # -------------------------------------------------------------
+      # 1. Build USB Host (Pico-PIO-USB on GP2/GP3) Firmware
+      # -------------------------------------------------------------
+      - name: Configure CMake (USB Host)
         run: |
-          cmake -B build -G Ninja \
+          cmake -B build-usb-host -G Ninja \
             -DPICO_BOARD=pico_w \
             -DPICO_SDK_PATH=${{ github.workspace }}/pico-sdk \
+            -DADAPTER_INPUT_BACKEND=USB_HOST \
             -DCMAKE_BUILD_TYPE=Release
 
-      - name: Build Firmware
+      - name: Build Firmware (USB Host)
         run: |
-          cmake --build build --target SwitchKMAdapter
+          cmake --build build-usb-host --target SwitchKMAdapter
+          cp build-usb-host/SwitchKMAdapter.uf2 SwitchKMAdapter-USB-Host.uf2
+          ls -lh SwitchKMAdapter-USB-Host.uf2
 
-      - name: Verify UF2 Output
+      # -------------------------------------------------------------
+      # 2. Build Wireless Bluetooth (CYW43 Bluepad32) Firmware
+      # -------------------------------------------------------------
+      - name: Configure CMake (Wireless BT)
         run: |
-          ls -la build/SwitchKMAdapter.uf2
-          cp build/SwitchKMAdapter.uf2 SwitchKMAdapter.uf2
+          cmake -B build-wireless-bt -G Ninja \
+            -DPICO_BOARD=pico_w \
+            -DPICO_SDK_PATH=${{ github.workspace }}/pico-sdk \
+            -DADAPTER_INPUT_BACKEND=WIRELESS_BT \
+            -DCMAKE_BUILD_TYPE=Release
 
-      - name: Upload UF2 Artifact
+      - name: Build Firmware (Wireless BT)
+        run: |
+          cmake --build build-wireless-bt --target SwitchKMAdapter
+          cp build-wireless-bt/SwitchKMAdapter.uf2 SwitchKMAdapter-Wireless-BT.uf2
+          ls -lh SwitchKMAdapter-Wireless-BT.uf2
+
+      # -------------------------------------------------------------
+      # 3. Artifact Upload & GitHub Releases
+      # -------------------------------------------------------------
+      - name: Upload UF2 Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: SwitchKMAdapter-uf2
-          path: SwitchKMAdapter.uf2
+          name: SwitchKMAdapter-Firmware-Binaries
+          path: |
+            SwitchKMAdapter-USB-Host.uf2
+            SwitchKMAdapter-Wireless-BT.uf2
           retention-days: 90
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: SwitchKMAdapter.uf2
+          files: |
+            SwitchKMAdapter-USB-Host.uf2
+            SwitchKMAdapter-Wireless-BT.uf2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

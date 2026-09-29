@@ -1,30 +1,19 @@
-/*
- * Nintendo Switch Pro Controller Protocol Emulation over USB.
- * References:
- *   - https://github.com/dekuNukem/Nintendo_Switch_Reverse_Engineering
- *   - https://github.com/mizuyoukanao/nxic-pico
- *
- * Flow:
- * 1. Switch sends 0x80 USB commands (handshake, MAC query).
- * 2. Switch sends 0x01 subcommand reports (device info, SPI flash reads for
- *    stick and IMU calibration).
- * 3. Once 0x80 0x04 arrives, adapter streams 0x30 full input reports every 8 ms.
- */
+// Nintendo Switch Pro Controller protocol emulation over USB.
+// Protocol reference:
+//   https://github.com/dekuNukem/Nintendo_Switch_Reverse_Engineering
+//   https://github.com/mizuyoukanao/nxic-pico
 
+#include "procon.h"
 #include <string.h>
-#include <stdio.h>
 #include "pico/time.h"
 #include "pico/unique_id.h"
 #include "tusb.h"
-#include "SwitchDescriptors.h"
 #include "report.h"
-#include "procon.h"
+#include "SwitchDescriptors.h"
 
-// Report interval: 8 ms (125 Hz)
-#define REPORT_INTERVAL_US 8000
-
-// Battery full + charging (0x90), wired connection (0x01) -> 0x91
-#define BATTERY_CONN 0x91
+// Each 0x30 report carries 3 IMU frames of 5 ms, so reports are sent every 15 ms
+// matching real Pro Controller report cadence and game sensor-fusion filters.
+#define REPORT_INTERVAL_US 15000
 
 static uint8_t mac[6];
 static bool streaming = false;
@@ -33,8 +22,12 @@ static uint8_t reply_buf[64];
 static absolute_time_t next_report;
 static ProconIdxState last_idx_state;
 
+// Battery full + charging (high nibble), wired connection (low nibble)
+#define BATTERY_CONN 0x91
+
 //--------------------------------------------------------------------
 // Emulated SPI flash, 0x6000-0x60FF (factory configuration/calibration).
+// The 0x8000 user-calibration area reads as erased (0xFF = not present).
 //--------------------------------------------------------------------
 static uint8_t spi_rom_6000[0x100];
 
@@ -42,6 +35,8 @@ static void spi_rom_init(void) {
     memset(spi_rom_6000, 0xFF, sizeof(spi_rom_6000));
 
     // 0x6020: IMU factory calibration
+    // Accel origin (0, 0, 0), Accel sensitivity 16384 (8G),
+    // Gyro origin (0, 0, 0), Gyro sensitivity 13371 (2000 dps)
     static const uint8_t imu_cal[24] = {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // accel origin
         0x00, 0x40, 0x00, 0x40, 0x00, 0x40, // accel sensitivity (16384 = 8G)
@@ -72,7 +67,7 @@ static void spi_rom_init(void) {
     memcpy(&spi_rom_6000[0x50], colors, sizeof(colors));
 
     // 0x6080: 6-axis horizontal offsets, followed by stick device parameters.
-    // Accel report when controller is flat: (0, 0, +4096)
+    // Must match the accel we report when the controller attitude is level: (0, 0, +4096)
     static const uint8_t horizontal_offset[6] = {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
     };
@@ -96,6 +91,7 @@ static uint8_t timer_byte(void) {
 }
 
 void procon_init(void) {
+    report_init();
     spi_rom_init();
 
     pico_unique_board_id_t id;
@@ -136,6 +132,7 @@ bool procon_is_streaming(void) {
 //--------------------------------------------------------------------
 static void handle_usb_cmd(uint8_t const *buf, uint16_t len) {
     if (len < 2) return;
+
     memset(reply_buf, 0, sizeof(reply_buf));
     reply_buf[0] = 0x81;
     reply_buf[1] = buf[1];
@@ -147,17 +144,21 @@ static void handle_usb_cmd(uint8_t const *buf, uint16_t len) {
             for (int i = 0; i < 6; i++) reply_buf[4 + i] = mac[5 - i];
             reply_pending = true;
             break;
+
         case 0x02: // handshake
-        case 0x03: // baud rate ack
+        case 0x03: // baud rate ack (UART legacy, ack)
             reply_pending = true;
             break;
-        case 0x04: // force USB HID only -> start streaming 0x30
+
+        case 0x04: // force USB HID only -> start streaming
             streaming = true;
             next_report = get_absolute_time();
             break;
+
         case 0x05: // allow timeout -> stop streaming
             streaming = false;
             break;
+
         default:
             break;
     }
@@ -168,6 +169,7 @@ static void handle_usb_cmd(uint8_t const *buf, uint16_t len) {
 //--------------------------------------------------------------------
 static void handle_subcmd(uint8_t const *buf, uint16_t len) {
     uint8_t sub = (len > 10) ? buf[10] : 0x00;
+
     memset(reply_buf, 0, sizeof(reply_buf));
     reply_buf[0] = 0x21;
     reply_buf[1] = timer_byte();
@@ -176,7 +178,7 @@ static void handle_subcmd(uint8_t const *buf, uint16_t len) {
     memcpy(&reply_buf[6], last_idx_state.state.stick, 6);
     reply_buf[12] = 0x80; // vibrator input report ack
 
-    uint8_t ack = 0x80; // default ack
+    uint8_t ack = 0x80; // plain ack
     uint8_t *d = &reply_buf[15];
 
     switch (sub) {
@@ -184,6 +186,7 @@ static void handle_subcmd(uint8_t const *buf, uint16_t len) {
             ack = 0x81;
             d[0] = 0x03;
             break;
+
         case 0x02: // request device info
             ack = 0x82;
             d[0] = 0x03; // firmware 3.72
@@ -194,15 +197,18 @@ static void handle_subcmd(uint8_t const *buf, uint16_t len) {
             d[10] = 0x01;
             d[11] = 0x02; // colors come from SPI
             break;
+
         case 0x03: // set input report mode
             if (len > 11 && buf[11] == 0x30) {
                 streaming = true;
                 next_report = get_absolute_time();
             }
             break;
+
         case 0x04: // trigger buttons elapsed time
             ack = 0x83;
             break;
+
         case 0x10: { // SPI flash read
             if (len < 16) break;
             ack = 0x90;
@@ -214,6 +220,7 @@ static void handle_subcmd(uint8_t const *buf, uint16_t len) {
             for (uint8_t i = 0; i < n; i++) d[5 + i] = spi_read_byte(addr + i);
             break;
         }
+
         case 0x21: { // set NFC/IR MCU configuration
             ack = 0xA0;
             static const uint8_t mcu_state[8] = {
@@ -222,6 +229,10 @@ static void handle_subcmd(uint8_t const *buf, uint16_t len) {
             memcpy(d, mcu_state, sizeof(mcu_state));
             break;
         }
+
+        // 0x00 controller state, 0x08 shipment, 0x22 MCU state, 0x30 player
+        // lights, 0x38 home light, 0x40 IMU enable, 0x41 IMU sensitivity,
+        // 0x48 vibration enable, ...: plain ack is sufficient
         default:
             break;
     }
@@ -240,8 +251,10 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
     (void)instance;
     (void)report_id;
     (void)report_type;
+
     if (bufsize == 0) return;
 
+    // Buffer[0] is the command byte directly as received from host
     switch (buffer[0]) {
         case 0x80:
             handle_usb_cmd(buffer, bufsize);
@@ -249,7 +262,7 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
         case 0x01:
             handle_subcmd(buffer, bufsize);
             break;
-        case 0x10: // rumble only (no reply required)
+        case 0x10: // rumble only, no reply required
         default:
             break;
     }
@@ -261,9 +274,23 @@ uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
     (void)instance;
     (void)report_id;
     (void)report_type;
-    (void)buffer;
-    (void)reqlen;
-    return 0;
+
+    if (!buffer || reqlen == 0) return 0;
+
+    // Return the current input report if queried via GET_REPORT
+    uint8_t rpt[64];
+    memset(rpt, 0, sizeof(rpt));
+    rpt[0] = 0x30;
+    rpt[1] = timer_byte();
+    rpt[2] = BATTERY_CONN;
+    memcpy(&rpt[3], last_idx_state.state.btn, 3);
+    memcpy(&rpt[6], last_idx_state.state.stick, 6);
+    rpt[12] = 0x80;
+    memcpy(&rpt[13], last_idx_state.state.imu, sizeof(last_idx_state.state.imu));
+
+    uint16_t copy_len = (reqlen < sizeof(rpt)) ? reqlen : sizeof(rpt);
+    memcpy(buffer, rpt, copy_len);
+    return copy_len;
 }
 
 void tud_umount_cb(void) {
@@ -283,7 +310,7 @@ void tud_suspend_cb(bool remote_wakeup_en) {
 void procon_task(void) {
     if (!tud_hid_ready()) return;
 
-    // Send pending handshake or subcommand replies first
+    // Send pending handshake or subcommand replies in response to host requests
     if (reply_pending) {
         reply_pending = false;
         tud_hid_report(0, reply_buf, sizeof(reply_buf));
@@ -295,7 +322,7 @@ void procon_task(void) {
 
     next_report = make_timeout_time_us(REPORT_INTERVAL_US);
 
-    // Fetch the latest global controller state produced by Bluepad32 on Core 1
+    // Fetch the latest global controller state safely from Core 1
     get_global_procon_state(&last_idx_state);
 
     uint8_t rpt[64];

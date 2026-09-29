@@ -1,49 +1,71 @@
-#include <btstack_run_loop.h>
-#include <pico/cyw43_arch.h>
 #include <pico/stdlib.h>
 #include <pico/multicore.h>
+#include "adapter_config.h"
+#include "usb.h"
+#include "procon.h"
+
+#if (ADAPTER_INPUT_BACKEND == BACKEND_USB_HOST)
+#include <hardware/clocks.h>
+#include "usb_host_backend.h"
+
+int main(void)
+{
+    // Pico-PIO-USB requires the system clock to be a multiple of 12 MHz (120 MHz standard)
+    set_sys_clock_khz(USB_HOST_SYS_CLOCK_KHZ, true);
+    stdio_init_all();
+
+    // Initialize Pro Controller data structures, unique MAC and SPI calibration ROM
+    procon_init();
+
+    // Initialize USB Host structures
+    usb_host_init();
+
+    // Core 1 runs the USB Host stack (Pico-PIO-USB) collecting keyboard and mouse reports
+    multicore_reset_core1();
+    multicore_launch_core1(usb_host_core1_task);
+
+    // Core 0 runs the USB Device stack (Pro Controller emulation -> Nintendo Switch dock)
+    usb_core_task();
+
+    return 0;
+}
+
+#elif (ADAPTER_INPUT_BACKEND == BACKEND_WIRELESS_BT)
+#include <btstack_run_loop.h>
+#include <pico/cyw43_arch.h>
 #include <pico/async_context.h>
 #include <uni.h>
-
 #include "sdkconfig.h"
-#include "usb.h"
 
-// Sanity check
-#ifndef CONFIG_BLUEPAD32_PLATFORM_CUSTOM
-#error "Pico W must use BLUEPAD32_PLATFORM_CUSTOM"
-#endif
-
-// Defined in my_platform.c
+// Defined in pico_switch_platform.c
 struct uni_platform *get_my_platform(void);
 
-void bluepad_core_task()
+void bluepad_core_task(void)
 {
-	// initialize CYW43 driver architecture (will enable BT if/because CYW43_ENABLE_BLUETOOTH == 1)
-	if (cyw43_arch_init()) {
-		loge("failed to initialise cyw43_arch\n");
-		return -1;
-	}
+    if (cyw43_arch_init()) {
+        return;
+    }
 
-	// Turn-on LED. Turn it off once init is done.
-	cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
-
-	// Must be called before uni_main()
-	uni_platform_set_custom(get_my_platform());
-
-	// Initialize BP32
-	uni_init(0, NULL);
-
-	// Does not return.
-	btstack_run_loop_execute();
+    cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
+    uni_platform_set_custom(get_my_platform());
+    uni_init(0, NULL);
+    btstack_run_loop_execute();
 }
 
-int
-main()
+int main(void)
 {
-	stdio_init_all();
+    stdio_init_all();
 
-	multicore_launch_core1(bluepad_core_task);
-	usb_core_task();
+    // Initialize Pro Controller data structures, unique MAC and SPI calibration ROM
+    procon_init();
 
-	return 0;
+    // Core 1 runs Bluepad32 Bluetooth stack
+    multicore_launch_core1(bluepad_core_task);
+
+    // Core 0 runs USB Pro Controller emulation
+    usb_core_task();
+
+    return 0;
 }
+
+#endif

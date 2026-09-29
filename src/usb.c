@@ -7,7 +7,6 @@
 
 void usb_core_task(void) {
     tusb_init();
-    procon_init();
 
     while (1) {
         tud_task();
