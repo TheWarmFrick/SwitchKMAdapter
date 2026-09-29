@@ -370,9 +370,9 @@ static void usb_host_update_procon(void) {
                     case KEY_RIGHT: cam_right = true; break;
 
                     // D-Pad
-                    case KEY_F: st.btn[1] |= PROCON_BTN1_DUP; break;
-                    case KEY_B: st.btn[1] |= PROCON_BTN1_DDOWN; break;
-                    case KEY_I: st.btn[1] |= PROCON_BTN1_DRIGHT; break;
+                    case KEY_F: st.btn[2] |= PROCON_BTN2_UP; break;
+                    case KEY_B: st.btn[2] |= PROCON_BTN2_DOWN; break;
+                    case KEY_I: st.btn[2] |= PROCON_BTN2_RIGHT; break;
 
                     // System
                     case KEY_TAB: st.btn[1] |= PROCON_BTN1_MINUS; break;
@@ -395,9 +395,9 @@ static void usb_host_update_procon(void) {
 
     // Mouse Buttons
     if (combined_mouse_buttons & MOUSE_BUTTON_LEFT)     st.btn[0] |= PROCON_BTN0_ZR;
-    if (combined_mouse_buttons & MOUSE_BUTTON_RIGHT)    st.btn[0] |= PROCON_BTN0_ZL;
-    if (combined_mouse_buttons & MOUSE_BUTTON_MIDDLE)   st.btn[1] |= PROCON_BTN1_DLEFT;
-    if (combined_mouse_buttons & MOUSE_BUTTON_BACKWARD) st.btn[0] |= PROCON_BTN0_L;
+    if (combined_mouse_buttons & MOUSE_BUTTON_RIGHT)    st.btn[2] |= PROCON_BTN2_ZL;
+    if (combined_mouse_buttons & MOUSE_BUTTON_MIDDLE)   st.btn[2] |= PROCON_BTN2_LEFT;
+    if (combined_mouse_buttons & MOUSE_BUTTON_BACKWARD) st.btn[2] |= PROCON_BTN2_L;
     if (combined_mouse_buttons & MOUSE_BUTTON_FORWARD)  st.btn[0] |= PROCON_BTN0_R;
 
     // Left Stick calculation
