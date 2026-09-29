@@ -38,6 +38,11 @@ set(CMAKE_CXX_STANDARD 17)
 
 pico_sdk_init()
 
+# Global include directories for project headers (include/) and config headers (src/btstack_config.h, src/sdkconfig.h)
+# Directory-scoped include_directories ensures submodules like libbluepad32 also find btstack_config.h
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
+
 # Common Pro Controller protocol & synchronization sources
 set(COMMON_SOURCES
     src/main.c
@@ -73,6 +78,12 @@ else()
     set(BLUEPAD32_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/bluepad32)
     set(BTSTACK_ROOT ${BLUEPAD32_ROOT}/external/btstack)
 
+    add_subdirectory(bluepad32/src/components/bluepad32 libbluepad32)
+    target_include_directories(bluepad32 PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+
     add_executable(SwitchKMAdapter
         ${COMMON_SOURCES}
         src/pico_switch_platform.c
@@ -94,8 +105,8 @@ else()
         tinyusb_device
         tinyusb_board
         pico_multicore
+        pico_unique_id
     )
-    add_subdirectory(bluepad32/src/components/bluepad32 libbluepad32)
 endif()
 
 pico_enable_stdio_usb(SwitchKMAdapter 0)
