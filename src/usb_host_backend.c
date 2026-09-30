@@ -255,6 +255,18 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance,
     bool parsed = parse_mouse_desc(desc_report, desc_len, &lay);
 
     bool is_kbd = (itf_protocol == HID_ITF_PROTOCOL_KEYBOARD);
+    if (!is_kbd && desc_report && desc_len > 4) {
+        // Fallback for composite/gaming keyboards declaring protocol NONE:
+        // scan descriptor for Usage Page (Generic Desktop: 0x05 0x01) and Usage (Keyboard: 0x09 0x06)
+        for (uint16_t i = 0; i + 3 < desc_len; i++) {
+            if (desc_report[i] == 0x05 && desc_report[i+1] == 0x01 &&
+                desc_report[i+2] == 0x09 && desc_report[i+3] == 0x06) {
+                is_kbd = true;
+                break;
+            }
+        }
+    }
+
     bool is_mouse = (itf_protocol == HID_ITF_PROTOCOL_MOUSE) ||
                     (parsed && lay.is_mouse);
     if (!is_kbd && !is_mouse) {
@@ -488,7 +500,9 @@ void usb_host_get_procon_state(ProconState *st) {
 // Core 1 main task for USB Host (Pico-PIO-USB)
 //--------------------------------------------------------------------
 void usb_host_core1_task(void) {
-    sleep_ms(10);
+    // 300 ms power-on stabilization delay: allows keyboards and mice
+    // to finish internal microcontroller reset, stabilize VBUS, and pull D+ high
+    sleep_ms(300);
 
     pio_usb_configuration_t pio_cfg = PIO_USB_DEFAULT_CONFIG;
     pio_cfg.pin_dp = PIN_USB_HOST_DP;

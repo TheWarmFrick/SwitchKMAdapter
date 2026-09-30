@@ -34,26 +34,43 @@ jobs:
           submodules: recursive
 
       # -------------------------------------------------------------
-      # 1. Build USB Host (Pico-PIO-USB on GP2/GP3) Firmware
+      # 1. Build USB Host for Standard Raspberry Pi Pico (RP2040)
       # -------------------------------------------------------------
-      - name: Configure CMake (USB Host)
+      - name: Configure CMake (USB Host - Standard Pico)
         run: |
-          cmake -B build-usb-host -G Ninja \
+          cmake -B build-usb-host-pico -G Ninja \
+            -DPICO_BOARD=pico \
+            -DPICO_SDK_PATH=${{ github.workspace }}/pico-sdk \
+            -DADAPTER_INPUT_BACKEND=USB_HOST \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Firmware (USB Host - Standard Pico)
+        run: |
+          cmake --build build-usb-host-pico --target SwitchKMAdapter
+          cp build-usb-host-pico/SwitchKMAdapter.uf2 SwitchKMAdapter-USB-Host.uf2
+          ls -lh SwitchKMAdapter-USB-Host.uf2
+
+      # -------------------------------------------------------------
+      # 2. Build USB Host for Raspberry Pi Pico W
+      # -------------------------------------------------------------
+      - name: Configure CMake (USB Host - Pico W)
+        run: |
+          cmake -B build-usb-host-picow -G Ninja \
             -DPICO_BOARD=pico_w \
             -DPICO_SDK_PATH=${{ github.workspace }}/pico-sdk \
             -DADAPTER_INPUT_BACKEND=USB_HOST \
             -DCMAKE_BUILD_TYPE=Release
 
-      - name: Build Firmware (USB Host)
+      - name: Build Firmware (USB Host - Pico W)
         run: |
-          cmake --build build-usb-host --target SwitchKMAdapter
-          cp build-usb-host/SwitchKMAdapter.uf2 SwitchKMAdapter-USB-Host.uf2
-          ls -lh SwitchKMAdapter-USB-Host.uf2
+          cmake --build build-usb-host-picow --target SwitchKMAdapter
+          cp build-usb-host-picow/SwitchKMAdapter.uf2 SwitchKMAdapter-USB-Host-PicoW.uf2
+          ls -lh SwitchKMAdapter-USB-Host-PicoW.uf2
 
       # -------------------------------------------------------------
-      # 2. Build Wireless Bluetooth (CYW43 Bluepad32) Firmware
+      # 3. Build Wireless Bluetooth (CYW43 Bluepad32 on Pico W)
       # -------------------------------------------------------------
-      - name: Configure CMake (Wireless BT)
+      - name: Configure CMake (Wireless BT - Pico W)
         run: |
           cmake -B build-wireless-bt -G Ninja \
             -DPICO_BOARD=pico_w \
@@ -68,7 +85,7 @@ jobs:
           ls -lh SwitchKMAdapter-Wireless-BT.uf2
 
       # -------------------------------------------------------------
-      # 3. Artifact Upload & GitHub Releases
+      # 4. Artifact Upload & GitHub Releases
       # -------------------------------------------------------------
       - name: Upload UF2 Artifacts
         uses: actions/upload-artifact@v4
@@ -76,6 +93,7 @@ jobs:
           name: SwitchKMAdapter-Firmware-Binaries
           path: |
             SwitchKMAdapter-USB-Host.uf2
+            SwitchKMAdapter-USB-Host-PicoW.uf2
             SwitchKMAdapter-Wireless-BT.uf2
           retention-days: 90
 
@@ -85,6 +103,7 @@ jobs:
         with:
           files: |
             SwitchKMAdapter-USB-Host.uf2
+            SwitchKMAdapter-USB-Host-PicoW.uf2
             SwitchKMAdapter-Wireless-BT.uf2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

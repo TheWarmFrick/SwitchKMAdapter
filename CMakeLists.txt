@@ -1,14 +1,18 @@
 cmake_minimum_required(VERSION 3.13)
 
-# Default to pico_w (or pico for USB Host)
+# Input Backend selection: "USB_HOST" (default) or "WIRELESS_BT"
+set(ADAPTER_INPUT_BACKEND "USB_HOST" CACHE STRING "Input backend: USB_HOST or WIRELESS_BT")
+
+# Default board selection: USB Host uses standard Raspberry Pi Pico (pico); Wireless uses Pico W (pico_w)
 if(NOT DEFINED PICO_BOARD)
-    set(PICO_BOARD pico_w)
+    if(ADAPTER_INPUT_BACKEND STREQUAL "WIRELESS_BT")
+        set(PICO_BOARD pico_w)
+    else()
+        set(PICO_BOARD pico)
+    endif()
 endif()
 
 include(pico_sdk_import.cmake)
-
-# Input Backend selection: "USB_HOST" (default) or "WIRELESS_BT"
-set(ADAPTER_INPUT_BACKEND "USB_HOST" CACHE STRING "Input backend: USB_HOST or WIRELESS_BT")
 
 if(ADAPTER_INPUT_BACKEND STREQUAL "USB_HOST")
     # Pico-PIO-USB (USB-A host port on GPIO pins, default D+ = GP2, D- = GP3)
