@@ -104,7 +104,8 @@ cmake -B build -DPICO_BOARD=pico_w -DADAPTER_INPUT_BACKEND=WIRELESS_BT
    - `SwitchKMAdapter-Wireless-BT.uf2` for Bluetooth keyboard & mouse.
 2. Hold the **BOOTSEL** button on your Raspberry Pi Pico/Pico W and connect it to your PC.
 3. Drag and drop the `.uf2` file onto the `RPI-RP2` drive.
-4. Connect the Pico to your Nintendo Switch dock using a USB-C data cable.
+4. **Peripherals First:** Plug your USB keyboard, mouse, or USB hub into the GP2/GP3 USB OTG port **before** powering on the Pico. (The RP2040 PIO-USB host controller detects device 1.5kΩ pull-up termination during initial bus stabilization).
+5. Connect the Pico to your Nintendo Switch dock using a USB-C data cable.
 
 ---
 

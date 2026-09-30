@@ -77,6 +77,7 @@ if(ADAPTER_INPUT_BACKEND STREQUAL "USB_HOST")
         tinyusb_device
         tinyusb_host
         tinyusb_pico_pio_usb
+        m
     )
 else()
     # WIRELESS_BT (Bluepad32 on Pico W)

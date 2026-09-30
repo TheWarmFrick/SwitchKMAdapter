@@ -39,6 +39,7 @@ int main(void)
     // Core 1 runs the USB Host stack (Pico-PIO-USB) collecting keyboard and mouse reports
     multicore_reset_core1();
     multicore_launch_core1(usb_host_core1_task);
+    sleep_ms(10);
 
     // Core 0 runs the USB Device stack (Pro Controller emulation -> Nintendo Switch dock)
     usb_core_task();

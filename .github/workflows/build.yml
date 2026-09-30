@@ -25,11 +25,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib cmake ninja-build python3
 
-      - name: Checkout Pico SDK
+      # -------------------------------------------------------------
+      # Pico SDK (Latest 2.x: Required for modern Pico-PIO-USB & TinyUSB Host)
+      # -------------------------------------------------------------
+      - name: Checkout Pico SDK (Latest 2.x)
         uses: actions/checkout@v4
         with:
           repository: raspberrypi/pico-sdk
-          ref: 1.5.1
           path: pico-sdk
           submodules: recursive
 
@@ -70,11 +72,19 @@ jobs:
       # -------------------------------------------------------------
       # 3. Build Wireless Bluetooth (CYW43 Bluepad32 on Pico W)
       # -------------------------------------------------------------
+      - name: Checkout Pico SDK 1.5.1 (for Bluepad32 Wireless BT)
+        uses: actions/checkout@v4
+        with:
+          repository: raspberrypi/pico-sdk
+          ref: 1.5.1
+          path: pico-sdk-1.5.1
+          submodules: recursive
+
       - name: Configure CMake (Wireless BT - Pico W)
         run: |
           cmake -B build-wireless-bt -G Ninja \
             -DPICO_BOARD=pico_w \
-            -DPICO_SDK_PATH=${{ github.workspace }}/pico-sdk \
+            -DPICO_SDK_PATH=${{ github.workspace }}/pico-sdk-1.5.1 \
             -DADAPTER_INPUT_BACKEND=WIRELESS_BT \
             -DCMAKE_BUILD_TYPE=Release
 
